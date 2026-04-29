@@ -27,6 +27,8 @@ The editor is designed to preserve object GIDs during save/export. It also block
 
 On first setup, the editor asks for the Horsey game folder and creates a backup of the official map before exports are allowed.
 
+Important: new maps require a new save file. Horsey bakes map data into save data, so an existing save may not reflect a newly exported map correctly.
+
 ## Requirements
 
 - Windows
