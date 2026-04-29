@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 *.log
 *.tmp
+editor_settings.json
 .DS_Store
 Thumbs.db
 .vscode/
