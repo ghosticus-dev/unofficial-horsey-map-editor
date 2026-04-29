@@ -253,8 +253,14 @@ class HorseyMapEditor:
         self.tools_panel = tk.Frame(self.sidebar)
         self.tools_panel.pack(side="top", fill="both", expand=True)
 
-        self.sidebar_title = tk.Label(self.tools_panel, text="Tools", anchor="w", font=("TkDefaultFont", 10, "bold"))
-        self.sidebar_title.pack(fill="x", padx=8, pady=(8, 4))
+        self.sidebar_title = tk.Label(
+            self.tools_panel,
+            text="Tools",
+            anchor="center",
+            font=("TkDefaultFont", 9, "bold"),
+            bg="#d0d0d0"
+        )
+        self.sidebar_title.pack(fill="x", padx=0, pady=(0, 4))
 
         self.mode_var = tk.StringVar(value=self.editor_mode)
         self.inspect_button = tk.Radiobutton(
@@ -739,6 +745,7 @@ class HorseyMapEditor:
             (self.main_area, "root_bg"),
             (self.sidebar, "root_bg"),
             (self.tools_panel, "root_bg"),
+            (self.sidebar_title, "header_bg"),
             (self.inspector_panel, "panel_bg"),
             (self.inspector_title, "header_bg"),
             (self.inspector_details_label, "panel_bg"),
