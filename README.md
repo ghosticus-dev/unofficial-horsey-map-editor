@@ -35,6 +35,8 @@ On first setup, the editor asks for the Horsey game folder and creates a backup 
 - Tkinter, included with most Python installs
 - A local Horsey install folder containing `Horsey.exe`
 
+Prebuilt downloads are available on the [Releases page](https://github.com/ghosticus-dev/unofficial-horsey-map-editor/releases).
+
 Install Python dependencies:
 
 ```powershell
