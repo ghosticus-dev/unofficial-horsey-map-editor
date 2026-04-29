@@ -14,12 +14,26 @@ from PIL import Image, ImageColor, ImageTk
 
 APP_TITLE = "Unofficial Horsey Game Map Editor"
 APP_VERSION = "ALPHA 0.2.0"
-BASE_DIR = Path(__file__).resolve().parent
+
+
+def app_dir():
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+BASE_DIR = app_dir()
 BACKUP_DIR = BASE_DIR / "backups"
 TILE_DEFS_FILE = BASE_DIR / "tile_defs.json"
 SETTINGS_FILE = BASE_DIR / "editor_settings.json"
-
 PAINT_TILE_ID = "1"
+FALLBACK_TILE_DEFS = {
+    PAINT_TILE_ID: {
+        "name": f"Tile {PAINT_TILE_ID}",
+        "color": "#f5b669",
+    }
+}
+
 MODE_INSPECT = "inspect"
 MODE_PAINT = "paint"
 MODE_OBJECT = "object"
@@ -77,10 +91,13 @@ DARK_THEME = {
 
 def load_tile_defs():
     if not TILE_DEFS_FILE.exists():
-        return {}
+        return FALLBACK_TILE_DEFS.copy(), f"Could not find tile_defs.json at:\n{TILE_DEFS_FILE}"
 
-    with open(TILE_DEFS_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(TILE_DEFS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f), ""
+    except (json.JSONDecodeError, OSError) as exc:
+        return FALLBACK_TILE_DEFS.copy(), f"Could not load tile_defs.json:\n{exc}"
 
 
 def load_settings():
@@ -193,7 +210,7 @@ class HorseyMapEditor:
         self.root = root
         self.root.title(f"{APP_TITLE} {APP_VERSION}")
 
-        self.tile_defs = load_tile_defs()
+        self.tile_defs, self.tile_defs_warning = load_tile_defs()
         self.settings = load_settings()
         self.ttk_style = ttk.Style()
         self.color_cache = {}
@@ -547,7 +564,19 @@ class HorseyMapEditor:
         self.apply_theme()
 
         self.root.after(100, self.show_empty_view)
+        if self.tile_defs_warning:
+            self.status.config(text="tile_defs.json missing or unreadable. Using fallback tile definitions.")
+            self.root.after(150, self.show_tile_defs_warning)
         self.root.after_idle(self.ensure_valid_install_location)
+
+    def show_tile_defs_warning(self):
+        messagebox.showwarning(
+            "Tile Definitions Not Loaded",
+            f"{self.tile_defs_warning}\n\n"
+            "The editor will continue with fallback tile definitions, but tile names and colors may be incomplete.\n\n"
+            "Place tile_defs.json in the same folder as the editor executable and restart the editor.",
+            parent=self.root
+        )
 
     def create_toolbar_menu_button(self, text, items):
         button = tk.Button(
