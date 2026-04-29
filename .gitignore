@@ -5,6 +5,11 @@ __pycache__/
 *.tmp
 editor_settings.json
 backups/
+build/
+dist/
+*.spec
+icon.ico
+icon.png
 .DS_Store
 Thumbs.db
 .vscode/
