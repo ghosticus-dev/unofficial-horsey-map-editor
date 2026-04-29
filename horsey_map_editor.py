@@ -22,6 +22,7 @@ SETTINGS_FILE = BASE_DIR / "editor_settings.json"
 PAINT_TILE_ID = "1"
 MODE_INSPECT = "inspect"
 MODE_PAINT = "paint"
+MODE_OBJECT = "object"
 
 REQUIRED_LOC_GIDS = (
     "97", "98", "99", "100", "101", "102", "103", "104",
@@ -199,8 +200,10 @@ class HorseyMapEditor:
         self.selected_tile_id = PAINT_TILE_ID
         self.editor_mode = MODE_INSPECT
         self.tile_buttons = {}
+        self.object_buttons = {}
         self.inspected_tile_xy = None
         self.inspected_object = None
+        self.selected_object_template = None
 
         self.zoom_levels = [5, 6, 8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40]
         self.zoom_index = 3
@@ -246,6 +249,8 @@ class HorseyMapEditor:
         self.original_csv = ""
         self.tiles = []
         self.map_objects = []
+        self.object_templates = []
+        self.next_object_id = 1
         self.map_width = 0
         self.map_height = 0
 
@@ -350,6 +355,16 @@ class HorseyMapEditor:
         )
         self.paint_button.pack(fill="x", padx=8, pady=2)
 
+        self.object_button = tk.Radiobutton(
+            self.tools_panel,
+            text="Object Mode",
+            variable=self.mode_var,
+            value=MODE_OBJECT,
+            indicatoron=False,
+            command=self.set_mode_from_ui
+        )
+        self.object_button.pack(fill="x", padx=8, pady=2)
+
         
 
         self.inspector_panel = tk.Frame(self.sidebar, height=120, relief="groove", bd=1, bg="white")
@@ -421,6 +436,51 @@ class HorseyMapEditor:
         self.tile_selector_panel.bind("<MouseWheel>", self.on_tile_selector_wheel)
         self.tile_list_container.bind("<MouseWheel>", self.on_tile_selector_wheel)
 
+        self.object_selector_panel = tk.Frame(self.sidebar, height=260, relief="groove", bd=1, bg="white")
+        self.object_selector_panel.pack(side="bottom", fill="x", padx=4, pady=4, before=self.tile_selector_panel)
+        self.object_selector_panel.pack_propagate(False)
+
+        self.object_selector_title = tk.Label(
+            self.object_selector_panel,
+            text="Object Selector",
+            anchor="center",
+            font=("TkDefaultFont", 8),
+            bg="#d0d0d0"
+        )
+        self.object_selector_title.pack(fill="x", padx=0, pady=(0, 2))
+
+        self.selected_object_label = tk.Label(
+            self.object_selector_panel,
+            text="Selected: None",
+            anchor="w",
+            wraplength=220,
+            justify="left",
+            bg="white"
+        )
+        self.selected_object_label.pack(fill="x", padx=8, pady=(0, 4))
+
+        self.object_list_container = tk.Frame(self.object_selector_panel, relief="sunken", bd=1, bg="white")
+        self.object_list_container.pack(fill="both", expand=True, padx=6, pady=(4, 8))
+
+        self.object_list_canvas = tk.Canvas(self.object_list_container, width=190, highlightthickness=0, bg="white")
+        self.object_list_scroll = ttk.Scrollbar(self.object_list_container, orient="vertical", command=self.object_list_canvas.yview)
+        self.object_list_frame = tk.Frame(self.object_list_canvas, bg="white")
+
+        self.object_list_frame.bind(
+            "<Configure>",
+            lambda event: self.object_list_canvas.configure(scrollregion=self.object_list_canvas.bbox("all"))
+        )
+
+        self.object_list_window = self.object_list_canvas.create_window((0, 0), window=self.object_list_frame, anchor="nw")
+        self.object_list_canvas.configure(yscrollcommand=self.object_list_scroll.set)
+        self.object_list_scroll.pack(side="right", fill="y")
+        self.object_list_canvas.pack(side="left", fill="both", expand=True)
+        self.object_list_canvas.bind("<Configure>", self.on_object_list_resize)
+        self.object_list_canvas.bind("<MouseWheel>", self.on_object_selector_wheel)
+        self.object_list_frame.bind("<MouseWheel>", self.on_object_selector_wheel)
+        self.object_selector_panel.bind("<MouseWheel>", self.on_object_selector_wheel)
+        self.object_list_container.bind("<MouseWheel>", self.on_object_selector_wheel)
+
         self.frame = tk.Frame(self.main_area)
         self.frame.pack(side="left", fill="both", expand=True)
 
@@ -455,7 +515,7 @@ class HorseyMapEditor:
         self.canvas.bind("<ButtonPress-1>", self.on_left_press)
         self.canvas.bind("<B1-Motion>", self.on_left_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_left_release)
-        self.canvas.bind("<Button-3>", self.clear_highlight)
+        self.canvas.bind("<Button-3>", self.on_right_press)
         self.canvas.bind("<MouseWheel>", self.on_mouse_wheel)
         self.canvas.bind("<Shift-MouseWheel>", self.on_shift_wheel)
         self.canvas.bind("<Motion>", self.on_mouse_move)
@@ -466,6 +526,8 @@ class HorseyMapEditor:
 
         self.populate_tile_selector()
         self.update_selected_tile_label()
+        self.populate_object_selector()
+        self.update_selected_object_label()
         self.apply_theme()
 
         self.root.after(100, self.show_empty_view)
@@ -613,6 +675,7 @@ class HorseyMapEditor:
         self.apply_theme_to_widget(target, theme)
         self.apply_theme_to_known_widgets(theme)
         self.update_tile_selector_selection()
+        self.update_object_selector_selection()
 
         if self.has_map_loaded():
             self.draw_grid(
@@ -834,6 +897,12 @@ class HorseyMapEditor:
             (self.tile_list_container, "panel_bg"),
             (self.tile_list_canvas, "panel_bg"),
             (self.tile_list_frame, "panel_bg"),
+            (self.object_selector_panel, "panel_bg"),
+            (self.object_selector_title, "header_bg"),
+            (self.selected_object_label, "panel_bg"),
+            (self.object_list_container, "panel_bg"),
+            (self.object_list_canvas, "panel_bg"),
+            (self.object_list_frame, "panel_bg"),
             (self.frame, "root_bg"),
             (self.bottom_bar, "root_bg"),
             (self.file_label, "root_bg"),
@@ -854,6 +923,8 @@ class HorseyMapEditor:
             self.inspector_panel,
             self.tile_selector_panel,
             self.tile_list_container,
+            self.object_selector_panel,
+            self.object_list_container,
             self.bottom_bar,
         ]
 
@@ -871,6 +942,7 @@ class HorseyMapEditor:
 
         scrollbar_styles = [
             (self.tile_list_scroll, "Horsey.Vertical.TScrollbar"),
+            (self.object_list_scroll, "Horsey.Vertical.TScrollbar"),
             (self.v_scroll, "Horsey.Vertical.TScrollbar"),
             (self.h_scroll, "Horsey.Horizontal.TScrollbar"),
         ]
@@ -1361,6 +1433,7 @@ class HorseyMapEditor:
     def set_mode_from_ui(self):
         self.editor_mode = self.mode_var.get()
         self.update_tile_selector_selection()
+        self.update_object_selector_selection()
         self.update_inspector_panel()
         self.status.config(text=f"Mode: {self.editor_mode.title()}")
 
@@ -1368,6 +1441,7 @@ class HorseyMapEditor:
         self.editor_mode = mode
         self.mode_var.set(mode)
         self.update_tile_selector_selection()
+        self.update_object_selector_selection()
         self.update_inspector_panel()
         self.status.config(text=f"Mode: {self.editor_mode.title()}")
 
@@ -1376,6 +1450,8 @@ class HorseyMapEditor:
             self.is_painting = True
             self.begin_action("Paint")
             self.paint_tile(event)
+        elif self.editor_mode == MODE_OBJECT:
+            self.place_selected_object(event)
         else:
             self.highlight_tile(event)
 
@@ -1396,12 +1472,26 @@ class HorseyMapEditor:
 
         self.is_painting = False
 
+    def on_right_press(self, event):
+        if self.editor_mode == MODE_OBJECT:
+            self.remove_hovered_object(event)
+        else:
+            self.clear_highlight(event)
+
     def on_tile_list_resize(self, event):
         self.tile_list_canvas.itemconfig(self.tile_list_window, width=event.width)
+
+    def on_object_list_resize(self, event):
+        self.object_list_canvas.itemconfig(self.object_list_window, width=event.width)
 
     def on_tile_selector_wheel(self, event):
         step = int(-1 * (event.delta / 120))
         self.tile_list_canvas.yview_scroll(step, "units")
+        return "break"
+
+    def on_object_selector_wheel(self, event):
+        step = int(-1 * (event.delta / 120))
+        self.object_list_canvas.yview_scroll(step, "units")
         return "break"
 
     def populate_tile_selector(self):
@@ -1469,6 +1559,185 @@ class HorseyMapEditor:
         self.selected_tile_id = tile_id
         self.update_selected_tile_label()
         self.set_mode(MODE_PAINT)
+
+    def build_object_templates(self):
+        templates = {}
+
+        for obj in self.map_objects:
+            key = self.object_template_key(obj)
+
+            if key not in templates:
+                templates[key] = {
+                    "key": key,
+                    "type": obj.get("type", ""),
+                    "gid": obj.get("gid", ""),
+                    "width": obj.get("width", 32.0),
+                    "height": obj.get("height", 32.0),
+                    "properties": self.copy_object_properties(obj.get("properties", {})),
+                    "repeatable": self.is_repeatable_loc_object(obj),
+                }
+
+        self.object_templates = sorted(
+            templates.values(),
+            key=lambda template: (
+                self.object_display_name(template).lower(),
+                int(template.get("gid", 0)) if str(template.get("gid", "")).isdigit() else 0
+            )
+        )
+
+    def object_template_key(self, obj):
+        properties = obj.get("properties", {})
+        property_names = tuple(sorted(properties.keys()))
+        return (obj.get("gid", ""), obj.get("type", ""), property_names)
+
+    def copy_object_properties(self, properties):
+        return {
+            name: {
+                "type": prop.get("type", ""),
+                "value": prop.get("value", "")
+            }
+            for name, prop in properties.items()
+        }
+
+    def object_display_name(self, obj):
+        object_type = obj.get("type") or "(blank)"
+        return object_type.strip() or "(blank)"
+
+    def object_template_count(self, template):
+        return sum(1 for obj in self.map_objects if self.object_template_key(obj) == template.get("key"))
+
+    def gid_count(self, gid):
+        return sum(1 for obj in self.map_objects if obj.get("gid", "") == gid)
+
+    def template_is_repeatable(self, template):
+        return template.get("repeatable", False)
+
+    def object_template_is_placed(self, template):
+        return self.gid_count(template.get("gid", "")) > 0
+
+    def next_available_object_id(self):
+        existing_ids = {
+            int(obj.get("id", 0))
+            for obj in self.map_objects
+            if str(obj.get("id", "")).isdigit()
+        }
+
+        while self.next_object_id in existing_ids:
+            self.next_object_id += 1
+
+        object_id = self.next_object_id
+        self.next_object_id += 1
+        return str(object_id)
+
+    def populate_object_selector(self):
+        theme = self.theme()
+
+        for child in self.object_list_frame.winfo_children():
+            child.destroy()
+
+        self.object_buttons = {}
+
+        for template in self.object_templates:
+            object_name = self.object_display_name(template)
+            gid = template.get("gid", "")
+            count = self.object_template_count(template)
+            missing_required = gid in REQUIRED_LOC_GIDS and self.gid_count(gid) == 0
+
+            outer = tk.Frame(self.object_list_frame, bg=theme["panel_bg"], height=36)
+            outer.pack(fill="x", pady=1, padx=(1, 4))
+            outer.pack_propagate(False)
+
+            row = tk.Frame(
+                outer,
+                relief="raised",
+                bd=2,
+                bg=theme["row_bg"],
+                highlightthickness=0
+            )
+            row.pack(fill="both", expand=True, padx=2, pady=2)
+
+            status_color = "#d63b3b" if missing_required else "#2fb36d"
+            swatch = tk.Label(
+                row,
+                text="",
+                bg=status_color,
+                width=2,
+                height=1,
+                relief="flat",
+                bd=0,
+                highlightthickness=1,
+                highlightbackground=theme["control_border"],
+                highlightcolor=theme["control_border"]
+            )
+            swatch.is_tile_swatch = True
+            swatch.pack(side="left", padx=4, pady=4)
+
+            label = tk.Label(
+                row,
+                text=f"{object_name} | GID: {gid} | Count: {count}",
+                anchor="w",
+                justify="left",
+                bg=theme["row_bg"],
+                fg=theme["text"],
+                wraplength=170
+            )
+            label.pack(side="left", fill="x", expand=True, padx=4, pady=2)
+
+            row.bind("<Button-1>", lambda event, tmpl=template: self.select_object_template(tmpl))
+            swatch.bind("<Button-1>", lambda event, tmpl=template: self.select_object_template(tmpl))
+            label.bind("<Button-1>", lambda event, tmpl=template: self.select_object_template(tmpl))
+            outer.bind("<MouseWheel>", self.on_object_selector_wheel)
+            row.bind("<MouseWheel>", self.on_object_selector_wheel)
+            swatch.bind("<MouseWheel>", self.on_object_selector_wheel)
+            label.bind("<MouseWheel>", self.on_object_selector_wheel)
+
+            self.object_buttons[template["key"]] = (outer, row, label, swatch)
+
+    def select_object_template(self, template):
+        self.selected_object_template = template
+        self.update_selected_object_label()
+        self.set_mode(MODE_OBJECT)
+
+    def update_selected_object_label(self):
+        if self.selected_object_template is None:
+            self.selected_object_label.config(text="Selected: None")
+            return
+
+        self.selected_object_label.config(
+            text=(
+                f"Selected: {self.object_display_name(self.selected_object_template)} | "
+                f"GID: {self.selected_object_template.get('gid')}"
+            )
+        )
+
+    def update_object_selector_selection(self):
+        theme = self.theme()
+
+        for template in self.object_templates:
+            widgets = self.object_buttons.get(template["key"])
+            if widgets is None:
+                continue
+
+            is_selected = self.editor_mode == MODE_OBJECT and self.selected_object_template is not None and template["key"] == self.selected_object_template.get("key")
+            bg = theme["row_selected_bg"] if is_selected else theme["row_bg"]
+            missing_required = template.get("gid", "") in REQUIRED_LOC_GIDS and self.gid_count(template.get("gid", "")) == 0
+            status_color = "#d63b3b" if missing_required else "#2fb36d"
+            outer, row, label, swatch = widgets
+
+            row.config(bg=bg, relief="sunken" if is_selected else "raised")
+            label.config(
+                text=f"{self.object_display_name(template)} | GID: {template.get('gid')} | Count: {self.object_template_count(template)}",
+                bg=bg,
+                fg=theme["text"]
+            )
+            swatch.config(bg=status_color)
+
+            if is_selected:
+                outer.config(bg=theme["selection_border"])
+                row.pack_configure(padx=1, pady=1)
+            else:
+                outer.config(bg=theme["panel_bg"])
+                row.pack_configure(padx=2, pady=2)
 
     def update_tile_selector_selection(self):
         theme = self.theme()
@@ -1678,15 +1947,25 @@ class HorseyMapEditor:
             self.highlight_object = None
             self.inspected_tile_xy = None
             self.inspected_object = None
+            self.selected_object_template = None
             self.last_mouse_x = None
             self.last_mouse_y = None
             self.undo_stack = []
             self.current_action = None
             self.is_painting = False
+            existing_object_ids = [
+                int(obj.get("id", 0))
+                for obj in self.map_objects
+                if str(obj.get("id", "")).isdigit()
+            ]
+            self.next_object_id = max(existing_object_ids, default=0) + 1
 
             self.draw_map()
             self.populate_tile_selector()
+            self.build_object_templates()
+            self.populate_object_selector()
             self.update_selected_tile_label()
+            self.update_selected_object_label()
             self.update_inspector_panel()
             self.file_label.config(text=f"Map: {self.current_file.name}")
             self.status.config(text=f"Loaded map: {self.current_file.name}")
@@ -1719,7 +1998,95 @@ class HorseyMapEditor:
             new_lines.append(",".join(self.tiles[row:row + self.map_width]))
 
         new_csv = "\n".join(new_lines)
-        return self.content.replace(self.original_csv, new_csv)
+        content = self.content.replace(self.original_csv, new_csv)
+        content = self.build_current_object_content(content)
+        return self.update_next_object_id(content)
+
+    def build_current_object_content(self, content):
+        object_group_pattern = r'(<objectgroup\b[^>]*name="Locs"[^>]*>\s*)(.*?)(\s*</objectgroup>)'
+        object_group_match = re.search(object_group_pattern, content, re.DOTALL)
+
+        if not object_group_match:
+            return content
+
+        object_lines = [self.serialize_map_object(obj) for obj in self.map_objects]
+        new_objects = "\n".join(object_lines)
+        return (
+            content[:object_group_match.start(2)]
+            + new_objects
+            + content[object_group_match.end(2):]
+        )
+
+    def update_next_object_id(self, content):
+        next_object_id = self.next_object_id
+
+        for obj in self.map_objects:
+            object_id = obj.get("id", "")
+            if str(object_id).isdigit():
+                next_object_id = max(next_object_id, int(object_id) + 1)
+
+        return re.sub(
+            r'nextobjectid="\d+"',
+            f'nextobjectid="{next_object_id}"',
+            content,
+            count=1
+        )
+
+    def serialize_map_object(self, obj):
+        attrs = [
+            f'id="{self.xml_escape(obj.get("id", ""))}"',
+        ]
+
+        object_type = obj.get("type", "")
+        if object_type != "":
+            attrs.append(f'type="{self.xml_escape(object_type)}"')
+
+        attrs.extend([
+            f'gid="{self.xml_escape(obj.get("gid", ""))}"',
+            f'x="{self.format_tmx_number(obj.get("x", 0))}"',
+            f'y="{self.format_tmx_number(obj.get("y", 0))}"',
+            f'width="{self.format_tmx_number(obj.get("width", 32))}"',
+            f'height="{self.format_tmx_number(obj.get("height", 32))}"',
+        ])
+
+        properties = obj.get("properties", {})
+
+        if not properties:
+            return f'  <object {" ".join(attrs)}/>'
+
+        property_lines = []
+        for name, prop in properties.items():
+            prop_attrs = [f'name="{self.xml_escape(name)}"']
+            prop_type = prop.get("type", "")
+
+            if prop_type:
+                prop_attrs.append(f'type="{self.xml_escape(prop_type)}"')
+
+            prop_attrs.append(f'value="{self.xml_escape(prop.get("value", ""))}"')
+            property_lines.append(f'    <property {" ".join(prop_attrs)}/>')
+
+        return (
+            f'  <object {" ".join(attrs)}>\n'
+            "   <properties>\n"
+            + "\n".join(property_lines)
+            + "\n   </properties>\n"
+            "  </object>"
+        )
+
+    def format_tmx_number(self, value):
+        value = float(value)
+        if value.is_integer():
+            return str(int(value))
+        return str(value)
+
+    def xml_escape(self, value):
+        return (
+            str(value)
+            .replace("&", "&amp;")
+            .replace('"', "&quot;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
 
     def save(self):
         if not self.has_map_loaded() or self.current_file is None or self.output_file is None:
@@ -2034,6 +2401,72 @@ class HorseyMapEditor:
         self.status.config(text=f"Undid: {action['description']}")
         self.redraw_viewport()
         return "break"
+
+    def place_selected_object(self, event):
+        if self.selected_object_template is None:
+            self.status.config(text="No object selected.")
+            return
+
+        x, y = self.get_tile_xy_from_event(event)
+
+        if x is None:
+            return
+
+        template = self.selected_object_template
+        object_name = self.object_display_name(template)
+
+        if not self.template_is_repeatable(template) and self.object_template_is_placed(template):
+            self.status.config(text=f"{object_name} is already placed!")
+            return
+
+        new_object = {
+            "id": self.next_available_object_id(),
+            "type": template.get("type", ""),
+            "gid": template.get("gid", ""),
+            "x": float(x * 32),
+            "y": float(y * 32),
+            "width": float(template.get("width", 32.0)),
+            "height": float(template.get("height", 32.0)),
+            "tile_x": x,
+            "tile_y": y,
+            "properties": self.copy_object_properties(template.get("properties", {})),
+        }
+
+        self.map_objects.append(new_object)
+        self.highlight_object = new_object
+        self.inspected_object = new_object
+        self.highlight_tile_xy = (x, y)
+        self.inspected_tile_xy = None
+        self.status.config(text=f"Placed {object_name} at ({x}, {y}).")
+        self.populate_object_selector()
+        self.update_object_selector_selection()
+        self.update_inspector_panel()
+        self.redraw_viewport()
+
+    def remove_hovered_object(self, event):
+        x, y = self.get_tile_xy_from_event(event)
+        obj = self.hover_object or self.get_object_from_tile_xy(x, y)
+
+        if obj is None:
+            self.status.config(text="No object under cursor.")
+            return
+
+        object_name = self.object_display_name(obj)
+        self.map_objects.remove(obj)
+
+        if self.highlight_object is obj:
+            self.highlight_object = None
+            self.inspected_object = None
+            self.highlight_tile_xy = None
+
+        if self.hover_object is obj:
+            self.hover_object = None
+
+        self.status.config(text=f"Removed {object_name}.")
+        self.populate_object_selector()
+        self.update_object_selector_selection()
+        self.update_inspector_panel()
+        self.redraw_viewport()
 
     def paint_tile(self, event):
         if not self.has_map_loaded():
