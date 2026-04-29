@@ -13,7 +13,7 @@ from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageColor, ImageTk
 
 APP_TITLE = "Unofficial Horsey Game Map Editor"
-APP_VERSION = "0.1.5D"
+APP_VERSION = "0.2.0"
 BASE_DIR = Path(__file__).resolve().parent
 BACKUP_DIR = BASE_DIR / "backups"
 TILE_DEFS_FILE = BASE_DIR / "tile_defs.json"
@@ -295,6 +295,8 @@ class HorseyMapEditor:
             "Settings",
             [
                 {"label": "Editor Settings...", "command": self.open_settings_window},
+                {"separator": True},
+                {"label": "Clear Install Location", "command": self.clear_install_location},
             ]
         )
         self.settings_button.pack(side="left", padx=4, pady=2)
@@ -306,15 +308,6 @@ class HorseyMapEditor:
             ]
         )
         self.help_button.pack(side="left", padx=4, pady=2)
-
-        # DEBUG menu (temporary)
-        self.debug_button = self.create_toolbar_menu_button(
-            "DEBUG",
-            [
-                {"label": "Clear Install Location", "command": self.debug_clear_install_location},
-            ]
-        )
-        self.debug_button.pack(side="left", padx=4, pady=2)
 
         self.main_area = tk.Frame(root)
         self.main_area.pack(fill="both", expand=True)
@@ -1014,7 +1007,8 @@ class HorseyMapEditor:
             "View Menu\n"
             "- Grid Lines: Toggle tile grid visibility\n\n"
             "Settings Menu\n"
-            "- Editor Settings...: Set the Horsey Game install location\n\n"
+            "- Editor Settings...: Set the Horsey Game install location\n"
+            "- Clear Install Location: Clear the saved install folder and reopen setup\n\n"
             "Mouse Controls\n"
             "- Left Click in Inspect Mode: Highlight/select tile\n"
             "- Left Click + Drag in Paint Mode: Paint tiles\n"
@@ -1277,11 +1271,26 @@ class HorseyMapEditor:
         shutil.copy2(official_map, backup_path)
         return backup_path
 
-    def debug_clear_install_location(self):
+    def clear_install_location(self):
+        confirmed = messagebox.askyesno(
+            "Clear Install Location",
+            "Clear the saved Horsey Game install location?\n\n"
+            "You will need to select a valid Horsey Game folder before continuing.",
+            parent=self.root
+        )
+
+        if not confirmed:
+            self.status.config(text="Install location unchanged.")
+            return
+
         self.settings["install_location"] = ""
         save_settings(self.settings)
-        messagebox.showinfo("DEBUG", "Install location cleared. Select a valid folder to continue.")
-        self.status.config(text="DEBUG: Install location cleared.")
+        messagebox.showinfo(
+            "Install Location Cleared",
+            "Install location cleared. Select a valid folder to continue.",
+            parent=self.root
+        )
+        self.status.config(text="Install location cleared.")
         self.open_welcome_window()
 
     def missing_required_loc_gids(self):

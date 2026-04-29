@@ -1,7 +1,7 @@
 {
-  "1": { "name": "Sand1", "color": "#f5b669" },
-  "2": { "name": "Sand2", "color": "#f5b669" },
-  "3": { "name": "Sand3", "color": "#f5b669" },
+  "1": { "name": "Sand", "color": "#f5b669" },
+  "2": { "name": "SandState2", "color": "#f5b669" },
+  "3": { "name": "SandState3", "color": "#f5b669" },
   "4": { "name": "SandBlank", "color": "#f5b669" },
   "5": { "name": "Grass", "color": "#3de82a" },
   "6": { "name": "Tundra", "color": "#114f0a" },
