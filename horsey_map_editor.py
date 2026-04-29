@@ -1,23 +1,68 @@
 import json
 import re
 import shutil
+import sys
 import time
 import tkinter as tk
+import ctypes
 from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageColor, ImageTk
 
-TMX_FILE = Path("test_horsey.tmx")
-OUTPUT_FILE = Path("output_horsey.tmx")
-BACKUP_DIR = Path("backups")
-TILE_DEFS_FILE = Path("tile_defs.json")
-SETTINGS_FILE = Path("editor_settings.json")
+APP_TITLE = "Unofficial Horsey Game Map Editor"
+APP_VERSION = "0.1.5D"
+BASE_DIR = Path(__file__).resolve().parent
+BACKUP_DIR = BASE_DIR / "backups"
+TILE_DEFS_FILE = BASE_DIR / "tile_defs.json"
+SETTINGS_FILE = BASE_DIR / "editor_settings.json"
 
 PAINT_TILE_ID = "1"
 MODE_INSPECT = "inspect"
 MODE_PAINT = "paint"
+
+LIGHT_THEME = {
+    "root_bg": "#d8d8d8",
+    "panel_bg": "#ececec",
+    "header_bg": "#c4c4c4",
+    "row_bg": "#d2d2d2",
+    "row_selected_bg": "#f4f4f4",
+    "text": "#101010",
+    "canvas_bg": "#111111",
+    "entry_bg": "#f7f7f7",
+    "entry_fg": "#101010",
+    "button_bg": "#d4d4d4",
+    "button_fg": "#101010",
+    "selection_border": "#2f5fb3",
+    "panel_border": "#9a9a9a",
+    "control_border": "#777777",
+    "scrollbar_bg": "#b8b8b8",
+    "scrollbar_active_bg": "#9f9f9f",
+    "scrollbar_trough": "#d0d0d0",
+    "scrollbar_arrow": "#101010",
+}
+
+DARK_THEME = {
+    "root_bg": "#1f1f1f",
+    "panel_bg": "#2a2a2a",
+    "header_bg": "#3a3a3a",
+    "row_bg": "#333333",
+    "row_selected_bg": "#4a4a4a",
+    "text": "#f2f2f2",
+    "canvas_bg": "#101010",
+    "entry_bg": "#151515",
+    "entry_fg": "#f2f2f2",
+    "button_bg": "#343434",
+    "button_fg": "#f2f2f2",
+    "selection_border": "#7aa2ff",
+    "panel_border": "#303030",
+    "control_border": "#555555",
+    "scrollbar_bg": "#3a3a3a",
+    "scrollbar_active_bg": "#505050",
+    "scrollbar_trough": "#1a1a1a",
+    "scrollbar_arrow": "#f2f2f2",
+}
 
 
 def load_tile_defs():
@@ -30,21 +75,27 @@ def load_tile_defs():
 
 def load_settings():
     if not SETTINGS_FILE.exists():
-        return {"install_location": ""}
+        return {"install_location": "", "dark_mode": True}
 
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
             settings = json.load(f)
     except (json.JSONDecodeError, OSError):
-        return {"install_location": ""}
+        return {"install_location": "", "dark_mode": True}
 
     settings.setdefault("install_location", "")
+    settings.setdefault("dark_mode", True)
     return settings
 
 
 def save_settings(settings):
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temp_file = SETTINGS_FILE.with_suffix(f"{SETTINGS_FILE.suffix}.tmp")
+
+    with open(temp_file, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=2)
+
+    temp_file.replace(SETTINGS_FILE)
 
 
 def load_tmx(path):
@@ -85,10 +136,11 @@ def load_tmx(path):
 class HorseyMapEditor:
     def __init__(self, root):
         self.root = root
-        self.root.title("Horsey Map Editor - Prototype")
+        self.root.title(f"{APP_TITLE} {APP_VERSION}")
 
         self.tile_defs = load_tile_defs()
         self.settings = load_settings()
+        self.ttk_style = ttk.Style()
         self.color_cache = {}
         self.selected_tile_id = PAINT_TILE_ID
         self.editor_mode = MODE_INSPECT
@@ -113,6 +165,8 @@ class HorseyMapEditor:
         self.image = None
         self.viewport_image_id = None
         self.tk_image = None
+        self.empty_view_button = None
+        self.empty_view_window_id = None
 
         self.hover_tile_xy = None
         self.highlight_tile_xy = None
@@ -126,47 +180,67 @@ class HorseyMapEditor:
         self.highlight_rect = None
         self.grid_lines = []
 
-        self.current_file = TMX_FILE
-        self.output_file = OUTPUT_FILE
-        self.content, self.original_csv, self.tiles, self.map_width, self.map_height = load_tmx(self.current_file)
+        self.current_file = None
+        self.output_file = None
+        self.content = ""
+        self.original_csv = ""
+        self.tiles = []
+        self.map_width = 0
+        self.map_height = 0
 
         self.toolbar = tk.Frame(root, relief="raised", bd=1)
         self.toolbar.pack(side="top", fill="x")
+        self.toolbar_popup = None
+        self.toolbar_popup_button = None
 
-        self.editor_button = tk.Menubutton(self.toolbar, text="Editor", relief="flat")
-        self.editor_menu = tk.Menu(self.editor_button, tearoff=0)
-        self.editor_menu.add_command(label="Load Map...", command=self.load_map_dialog)
-        self.editor_menu.add_command(label="Save As...", command=self.save_as_dialog)
-        self.editor_menu.add_separator()
-        self.editor_menu.add_command(label="Export Map to Game", command=self.export_map_to_game)
-        self.editor_menu.add_command(label="Restore Original Map TMX", command=self.restore_original_map_tmx)
-        self.editor_button.config(menu=self.editor_menu)
+        self.editor_button = self.create_toolbar_menu_button(
+            "Editor",
+            [
+                {"label": "Load Map...", "command": self.load_map_dialog},
+                {"label": "Save As...", "command": self.save_as_dialog},
+                {"separator": True},
+                {"label": "Export Map to Game", "command": self.export_map_to_game},
+                {"label": "Restore Original Map TMX", "command": self.restore_original_map_tmx},
+            ]
+        )
         self.editor_button.pack(side="left", padx=4, pady=2)
 
-        self.view_button = tk.Menubutton(self.toolbar, text="View", relief="flat")
-        self.view_menu = tk.Menu(self.view_button, tearoff=0)
         self.show_grid = tk.BooleanVar(value=True)
-        self.view_menu.add_checkbutton(label="Grid Lines", variable=self.show_grid, command=self.toggle_grid)
-        self.view_button.config(menu=self.view_menu)
+        self.view_button = self.create_toolbar_menu_button(
+            "View",
+            [
+                {
+                    "label": "Grid Lines",
+                    "command": self.toggle_grid_menu_item,
+                    "dynamic_label": self.grid_toggle_menu_label
+                },
+            ]
+        )
         self.view_button.pack(side="left", padx=4, pady=2)
 
-        self.settings_button = tk.Menubutton(self.toolbar, text="Settings", relief="flat")
-        self.settings_menu = tk.Menu(self.settings_button, tearoff=0)
-        self.settings_menu.add_command(label="Editor Settings...", command=self.open_settings_window)
-        self.settings_button.config(menu=self.settings_menu)
+        self.settings_button = self.create_toolbar_menu_button(
+            "Settings",
+            [
+                {"label": "Editor Settings...", "command": self.open_settings_window},
+            ]
+        )
         self.settings_button.pack(side="left", padx=4, pady=2)
 
-        self.help_button = tk.Menubutton(self.toolbar, text="Help", relief="flat")
-        self.help_menu = tk.Menu(self.help_button, tearoff=0)
-        self.help_menu.add_command(label="Show Controls", command=self.show_controls_dialog)
-        self.help_button.config(menu=self.help_menu)
+        self.help_button = self.create_toolbar_menu_button(
+            "Help",
+            [
+                {"label": "Show Controls", "command": self.show_controls_dialog},
+            ]
+        )
         self.help_button.pack(side="left", padx=4, pady=2)
 
         # DEBUG menu (temporary)
-        self.debug_button = tk.Menubutton(self.toolbar, text="DEBUG", relief="flat")
-        self.debug_menu = tk.Menu(self.debug_button, tearoff=0)
-        self.debug_menu.add_command(label="Clear Install Location", command=self.debug_clear_install_location)
-        self.debug_button.config(menu=self.debug_menu)
+        self.debug_button = self.create_toolbar_menu_button(
+            "DEBUG",
+            [
+                {"label": "Clear Install Location", "command": self.debug_clear_install_location},
+            ]
+        )
         self.debug_button.pack(side="left", padx=4, pady=2)
 
         self.main_area = tk.Frame(root)
@@ -256,7 +330,7 @@ class HorseyMapEditor:
         self.tile_list_container.pack(fill="both", expand=True, padx=6, pady=(4, 8))
 
         self.tile_list_canvas = tk.Canvas(self.tile_list_container, width=190, highlightthickness=0, bg="white")
-        self.tile_list_scroll = tk.Scrollbar(self.tile_list_container, orient="vertical", command=self.tile_list_canvas.yview)
+        self.tile_list_scroll = ttk.Scrollbar(self.tile_list_container, orient="vertical", command=self.tile_list_canvas.yview)
         self.tile_list_frame = tk.Frame(self.tile_list_canvas, bg="white")
 
         self.tile_list_frame.bind(
@@ -285,8 +359,8 @@ class HorseyMapEditor:
             highlightthickness=0
         )
 
-        self.h_scroll = tk.Scrollbar(self.frame, orient="horizontal", command=self.on_h_scrollbar)
-        self.v_scroll = tk.Scrollbar(self.frame, orient="vertical", command=self.on_v_scrollbar)
+        self.h_scroll = ttk.Scrollbar(self.frame, orient="horizontal", command=self.on_h_scrollbar)
+        self.v_scroll = ttk.Scrollbar(self.frame, orient="vertical", command=self.on_v_scrollbar)
 
         self.canvas.grid(row=0, column=0, sticky="nsew")
         self.v_scroll.grid(row=0, column=1, sticky="ns")
@@ -298,10 +372,10 @@ class HorseyMapEditor:
         self.bottom_bar = tk.Frame(root, relief="sunken", bd=1)
         self.bottom_bar.pack(side="bottom", fill="x")
 
-        self.file_label = tk.Label(self.bottom_bar, text=f"Map: {self.current_file.name}", anchor="w")
+        self.file_label = tk.Label(self.bottom_bar, text="Map: None", anchor="w")
         self.file_label.pack(side="left", padx=6)
 
-        self.status = tk.Label(self.bottom_bar, text="Loaded map.", anchor="e")
+        self.status = tk.Label(self.bottom_bar, text="No map loaded.", anchor="e")
         self.status.pack(side="right", fill="x", expand=True, padx=6)
 
 
@@ -319,10 +393,111 @@ class HorseyMapEditor:
 
         self.populate_tile_selector()
         self.update_selected_tile_label()
+        self.apply_theme()
 
-        self.status.config(text="Loading map image...")
-        self.root.after(100, self.draw_map)
-        self.root.after(250, self.ensure_valid_install_location)
+        self.root.after(100, self.show_empty_view)
+        self.root.after_idle(self.ensure_valid_install_location)
+
+    def create_toolbar_menu_button(self, text, items):
+        button = tk.Button(
+            self.toolbar,
+            text=text,
+            relief="flat",
+            bd=0,
+            command=lambda: self.show_toolbar_popup(button, items)
+        )
+        button.menu_items = items
+        return button
+
+    def show_toolbar_popup(self, button, items):
+        if self.toolbar_popup is not None and self.toolbar_popup_button == button:
+            self.close_toolbar_popup()
+            return
+
+        self.close_toolbar_popup()
+        theme = self.theme()
+
+        popup = tk.Toplevel(self.root)
+        popup.overrideredirect(True)
+        popup.transient(self.root)
+        popup.config(bg=theme["panel_border"], bd=0, highlightthickness=0)
+
+        content = tk.Frame(
+            popup,
+            bg=theme["panel_bg"],
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=theme["panel_border"],
+            highlightcolor=theme["panel_border"]
+        )
+        content.pack(fill="both", expand=True, padx=1, pady=1)
+
+        for item in items:
+            if item.get("separator"):
+                tk.Frame(content, height=1, bg=theme["panel_border"]).pack(fill="x", padx=6, pady=3)
+                continue
+
+            if "dynamic_label" in item:
+                display_label = f"  {item['dynamic_label']()}"
+            else:
+                display_label = f"  {item['label']}"
+
+            row = tk.Label(
+                content,
+                text=display_label,
+                anchor="w",
+                bg=theme["panel_bg"],
+                fg=theme["text"],
+                padx=18,
+                pady=3
+            )
+            row.pack(fill="x")
+
+            def run_command(event=None, command=item["command"]):
+                self.close_toolbar_popup()
+                command()
+
+            def activate(event, widget=row):
+                widget.config(bg=theme["row_selected_bg"])
+
+            def deactivate(event, widget=row):
+                widget.config(bg=theme["panel_bg"])
+
+            row.bind("<Button-1>", run_command)
+            row.bind("<Return>", run_command)
+            row.bind("<Enter>", activate)
+            row.bind("<Leave>", deactivate)
+
+        x = button.winfo_rootx()
+        y = button.winfo_rooty() + button.winfo_height()
+        popup.geometry(f"+{x}+{y}")
+        popup.bind("<Escape>", lambda event: self.close_toolbar_popup())
+        popup.lift(self.root)
+        popup.attributes("-topmost", True)
+        popup.after_idle(lambda: popup.attributes("-topmost", False))
+
+        self.toolbar_popup = popup
+        self.toolbar_popup_button = button
+
+    def close_toolbar_popup(self):
+        if self.toolbar_popup is None:
+            return
+
+        try:
+            if self.toolbar_popup.winfo_exists():
+                self.toolbar_popup.destroy()
+        except tk.TclError:
+            pass
+
+        self.toolbar_popup = None
+        self.toolbar_popup_button = None
+
+    def toggle_grid_menu_item(self):
+        self.show_grid.set(not self.show_grid.get())
+        self.toggle_grid()
+
+    def grid_toggle_menu_label(self):
+        return "Hide Gridlines" if self.show_grid.get() else "Show Gridlines"
 
     def center_window(self, window):
         window.update_idletasks()
@@ -339,6 +514,302 @@ class HorseyMapEditor:
         y = parent_y + (parent_h // 2) - (window_h // 2)
 
         window.geometry(f"+{x}+{y}")
+
+    def theme(self):
+        return DARK_THEME if self.settings.get("dark_mode", False) else LIGHT_THEME
+
+    def apply_theme(self, window=None):
+        theme = self.theme()
+        target = window or self.root
+
+        self.apply_ttk_theme(theme)
+        self.apply_window_chrome(target)
+        self.schedule_window_chrome_refresh(target)
+        self.apply_theme_to_widget(target, theme)
+        self.apply_theme_to_known_widgets(theme)
+        self.update_tile_selector_selection()
+
+        if self.has_map_loaded():
+            self.draw_grid(
+                max(0, int(self.view_x // self.tile_size)),
+                max(0, int(self.view_y // self.tile_size)),
+                min(self.map_width, int((self.view_x + self.canvas_width()) // self.tile_size) + 2),
+                min(self.map_height, int((self.view_y + self.canvas_height()) // self.tile_size) + 2)
+            )
+
+    def apply_theme_to_widget(self, widget, theme):
+        if getattr(widget, "is_tile_swatch", False):
+            return
+
+        try:
+            if isinstance(widget, (tk.Tk, tk.Toplevel)):
+                widget.config(bg=theme["root_bg"])
+            elif isinstance(widget, tk.Canvas):
+                widget.config(bg=theme["canvas_bg"])
+            elif isinstance(widget, ttk.Scrollbar):
+                widget.config(style="Horsey.Vertical.TScrollbar")
+            elif isinstance(widget, tk.Entry):
+                widget.config(
+                    bg=theme["entry_bg"],
+                    fg=theme["entry_fg"],
+                    insertbackground=theme["entry_fg"],
+                    relief="flat",
+                    bd=1,
+                    highlightthickness=1,
+                    highlightbackground=theme["control_border"],
+                    highlightcolor=theme["selection_border"]
+                )
+            elif isinstance(widget, tk.Radiobutton):
+                widget.config(
+                    bg=theme["button_bg"],
+                    fg=theme["button_fg"],
+                    activebackground=theme["row_selected_bg"],
+                    activeforeground=theme["text"],
+                    selectcolor=theme["panel_bg"],
+                    relief="raised",
+                    bd=2,
+                    borderwidth=2,
+                    highlightthickness=0,
+                    offrelief="raised",
+                    overrelief="raised"
+                )
+            elif isinstance(widget, tk.Checkbutton):
+                widget.config(
+                    bg=theme["button_bg"],
+                    fg=theme["button_fg"],
+                    activebackground=theme["row_selected_bg"],
+                    activeforeground=theme["text"],
+                    selectcolor=theme["panel_bg"],
+                    relief="flat",
+                    bd=0,
+                    highlightthickness=0
+                )
+            elif isinstance(widget, tk.Menubutton):
+                widget.config(
+                    bg=theme["root_bg"],
+                    fg=theme["button_fg"],
+                    activebackground=theme["row_selected_bg"],
+                    activeforeground=theme["text"],
+                    relief="flat",
+                    bd=0,
+                    borderwidth=0,
+                    highlightthickness=0,
+                    takefocus=0
+                )
+            elif isinstance(widget, tk.Button):
+                if widget.master == self.toolbar:
+                    widget.config(
+                        bg=theme["root_bg"],
+                        fg=theme["button_fg"],
+                        activebackground=theme["row_selected_bg"],
+                        activeforeground=theme["text"],
+                        relief="flat",
+                        bd=0,
+                        highlightthickness=0,
+                        takefocus=0
+                    )
+                else:
+                    widget.config(
+                        bg=theme["button_bg"],
+                        fg=theme["button_fg"],
+                        activebackground=theme["row_selected_bg"],
+                        activeforeground=theme["text"],
+                        relief="raised",
+                        bd=2,
+                        highlightthickness=0,
+                        takefocus=0
+                    )
+            elif isinstance(widget, tk.Label):
+                widget.config(
+                    bg=theme["panel_bg"],
+                    fg=theme["text"],
+                    bd=0,
+                    highlightthickness=0
+                )
+            elif isinstance(widget, tk.Frame):
+                widget.config(
+                    bg=theme["root_bg"],
+                    highlightbackground=theme["panel_border"],
+                    highlightcolor=theme["panel_border"]
+                )
+            elif isinstance(widget, tk.Menu):
+                widget.config(
+                    bg=theme["panel_bg"],
+                    fg=theme["text"],
+                    activebackground=theme["row_selected_bg"],
+                    activeforeground=theme["text"]
+                )
+        except tk.TclError:
+            pass
+
+        for child in widget.winfo_children():
+            self.apply_theme_to_widget(child, theme)
+
+    def apply_ttk_theme(self, theme):
+        try:
+            self.ttk_style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        common_scrollbar_settings = {
+            "background": theme["scrollbar_bg"],
+            "darkcolor": theme["scrollbar_bg"],
+            "lightcolor": theme["scrollbar_bg"],
+            "troughcolor": theme["scrollbar_trough"],
+            "bordercolor": theme["root_bg"],
+            "arrowcolor": theme["scrollbar_arrow"],
+            "relief": "flat",
+            "borderwidth": 1,
+        }
+
+        self.ttk_style.configure("Horsey.Vertical.TScrollbar", **common_scrollbar_settings)
+        self.ttk_style.configure("Horsey.Horizontal.TScrollbar", **common_scrollbar_settings)
+
+        for style_name in ["Horsey.Vertical.TScrollbar", "Horsey.Horizontal.TScrollbar"]:
+            self.ttk_style.map(
+                style_name,
+                background=[
+                    ("active", theme["scrollbar_active_bg"]),
+                    ("pressed", theme["scrollbar_active_bg"]),
+                    ("!disabled", theme["scrollbar_bg"]),
+                ],
+                arrowcolor=[
+                    ("disabled", theme["scrollbar_trough"]),
+                    ("!disabled", theme["scrollbar_arrow"]),
+                ],
+            )
+
+    def apply_window_chrome(self, window):
+        if sys.platform != "win32":
+            return
+
+        try:
+            window.update_idletasks()
+            hwnd = self.window_handle(window)
+            enabled = ctypes.c_int(1 if self.settings.get("dark_mode", False) else 0)
+            dark_mode = self.settings.get("dark_mode", False)
+
+            for attribute in (20, 19):
+                result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd,
+                    attribute,
+                    ctypes.byref(enabled),
+                    ctypes.sizeof(enabled)
+                )
+
+                if result == 0:
+                    break
+
+            border_color = self.colorref("#2b2b2b" if dark_mode else "#d8d8d8")
+            caption_color = self.colorref("#1f1f1f" if dark_mode else "#d8d8d8")
+            text_color = self.colorref("#f2f2f2" if dark_mode else "#000000")
+
+            for attribute, color in [(34, border_color), (35, caption_color), (36, text_color)]:
+                color_value = ctypes.c_int(color)
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd,
+                    attribute,
+                    ctypes.byref(color_value),
+                    ctypes.sizeof(color_value)
+                )
+        except Exception:
+            pass
+
+    def schedule_window_chrome_refresh(self, window):
+        for delay in (1, 50, 200):
+            try:
+                window.after(delay, lambda target=window: self.apply_window_chrome(target))
+            except tk.TclError:
+                pass
+
+    def window_handle(self, window):
+        hwnd = window.winfo_id()
+        parent = ctypes.windll.user32.GetParent(hwnd)
+        return parent or hwnd
+
+    def colorref(self, color):
+        red = int(color[1:3], 16)
+        green = int(color[3:5], 16)
+        blue = int(color[5:7], 16)
+        return red | (green << 8) | (blue << 16)
+
+    def apply_theme_to_known_widgets(self, theme):
+        themed_widgets = [
+            (self.toolbar, "root_bg"),
+            (self.main_area, "root_bg"),
+            (self.sidebar, "root_bg"),
+            (self.tools_panel, "root_bg"),
+            (self.inspector_panel, "panel_bg"),
+            (self.inspector_title, "header_bg"),
+            (self.inspector_details_label, "panel_bg"),
+            (self.tile_selector_panel, "panel_bg"),
+            (self.tile_selector_title, "header_bg"),
+            (self.selected_tile_label, "panel_bg"),
+            (self.tile_list_container, "panel_bg"),
+            (self.tile_list_canvas, "panel_bg"),
+            (self.tile_list_frame, "panel_bg"),
+            (self.frame, "root_bg"),
+            (self.bottom_bar, "root_bg"),
+            (self.file_label, "root_bg"),
+            (self.status, "root_bg"),
+        ]
+
+        for widget, bg_key in themed_widgets:
+            try:
+                widget.config(bg=theme[bg_key])
+                if isinstance(widget, tk.Label):
+                    widget.config(fg=theme["text"])
+            except tk.TclError:
+                pass
+
+        bordered_widgets = [
+            self.toolbar,
+            self.sidebar,
+            self.inspector_panel,
+            self.tile_selector_panel,
+            self.tile_list_container,
+            self.bottom_bar,
+        ]
+
+        for widget in bordered_widgets:
+            try:
+                widget.config(
+                    relief="flat",
+                    bd=0,
+                    highlightthickness=1,
+                    highlightbackground=theme["panel_border"],
+                    highlightcolor=theme["panel_border"]
+                )
+            except tk.TclError:
+                pass
+
+        scrollbar_styles = [
+            (self.tile_list_scroll, "Horsey.Vertical.TScrollbar"),
+            (self.v_scroll, "Horsey.Vertical.TScrollbar"),
+            (self.h_scroll, "Horsey.Horizontal.TScrollbar"),
+        ]
+
+        for scrollbar, style_name in scrollbar_styles:
+            try:
+                scrollbar.config(style=style_name)
+            except tk.TclError:
+                pass
+
+    def set_dark_mode(self, enabled, active_window=None):
+        old_dark_mode = self.settings.get("dark_mode", False)
+        self.settings["dark_mode"] = bool(enabled)
+
+        try:
+            save_settings(self.settings)
+        except OSError as exc:
+            self.settings["dark_mode"] = old_dark_mode
+            messagebox.showerror("Settings Save Failed", str(exc))
+            return
+
+        self.apply_theme()
+
+        if active_window is not None and active_window.winfo_exists():
+            self.apply_theme(active_window)
 
     def show_controls_dialog(self):
         controls_text = (
@@ -366,6 +837,35 @@ class HorseyMapEditor:
 
         messagebox.showinfo("Controls", controls_text)
 
+    def save_install_location(self, install_path):
+        install_path = install_path.resolve()
+        horsey_exe = install_path / "Horsey.exe"
+
+        if not install_path.exists() or not install_path.is_dir():
+            raise ValueError("That folder does not exist.")
+
+        if not horsey_exe.exists() or not horsey_exe.is_file():
+            raise ValueError(f"Could not find Horsey.exe in:\n{install_path}")
+
+        old_install_location = self.settings.get("install_location", "")
+        old_install_path = Path(old_install_location).resolve() if old_install_location else None
+        install_location_changed = old_install_path != install_path
+        self.settings["install_location"] = str(install_path)
+
+        try:
+            save_settings(self.settings)
+            backup_path = self.create_official_map_backup(overwrite=False) if install_location_changed else self.official_backup_path()
+        except Exception:
+            self.settings["install_location"] = old_install_location
+            try:
+                save_settings(self.settings)
+            except OSError:
+                pass
+            raise
+
+        self.status.config(text="Install location valid. Official map backup ready.")
+        return backup_path, install_location_changed
+
     def open_settings_window(self, startup_message=None):
         settings_window = tk.Toplevel(self.root)
         settings_window.title("Editor Settings")
@@ -392,6 +892,15 @@ class HorseyMapEditor:
         entry = tk.Entry(settings_window, textvariable=location_var, width=60)
         entry.pack(fill="x", padx=10, pady=(0, 6))
 
+        dark_mode_var = tk.BooleanVar(value=self.settings.get("dark_mode", False))
+        dark_mode_check = tk.Checkbutton(
+            settings_window,
+            text="Dark Mode",
+            variable=dark_mode_var,
+            command=lambda: self.set_dark_mode(dark_mode_var.get(), settings_window)
+        )
+        dark_mode_check.pack(fill="x", padx=10, pady=(0, 10))
+
         def browse_location():
             selected = filedialog.askdirectory(title="Select Folder Containing Horsey.exe")
             if selected:
@@ -399,35 +908,27 @@ class HorseyMapEditor:
 
         def save_location():
             install_path = Path(location_var.get().strip())
-            horsey_exe = install_path / "Horsey.exe"
-
-            if not install_path.exists() or not install_path.is_dir():
-                messagebox.showerror("Invalid Install Location", "That folder does not exist.")
-                return
-
-            if not horsey_exe.exists() or not horsey_exe.is_file():
-                messagebox.showerror(
-                    "Horsey.exe Not Found",
-                    f"Could not find Horsey.exe in:\n{install_path}"
-                )
-                return
-
-            self.settings["install_location"] = str(install_path)
-            save_settings(self.settings)
 
             try:
-                self.create_official_map_backup(overwrite=False)
-            except Exception as exc:
-                messagebox.showerror("Backup Failed", str(exc))
+                backup_path, install_location_changed = self.save_install_location(install_path)
+            except ValueError as exc:
+                messagebox.showerror("Invalid Install Location", str(exc))
+                return
+            except OSError as exc:
+                messagebox.showerror("Install Location Save Failed", str(exc))
                 return
 
             settings_window.destroy()
-            messagebox.showinfo(
-                "Install Location Valid",
-                "Install Location was valid.\n\n"
-                "A backup of /data/horsey.tmx has been created.\n\n"
-                "You are ready to start making maps."
-            )
+
+            if install_location_changed:
+                messagebox.showinfo(
+                    "Install Location Valid",
+                    "Install Location was valid.\n\n"
+                    "A backup of the official map was created at:\n"
+                    f"{backup_path}\n\n"
+                    "You are ready to start making maps."
+                )
+
             self.status.config(text="Install location valid. Official map backup ready.")
 
         button_row = tk.Frame(settings_window)
@@ -437,6 +938,7 @@ class HorseyMapEditor:
         tk.Button(button_row, text="Save", command=save_location).pack(side="right", padx=(4, 0))
         tk.Button(button_row, text="Cancel", command=settings_window.destroy).pack(side="right")
 
+        self.apply_theme(settings_window)
         self.center_window(settings_window)
 
     def has_valid_install_location(self):
@@ -449,7 +951,111 @@ class HorseyMapEditor:
 
     def ensure_valid_install_location(self):
         if not self.has_valid_install_location():
-            self.open_settings_window("No Install Location Set. Please define the path to Horsey.exe")
+            self.open_welcome_window()
+
+    def open_welcome_window(self):
+        welcome_window = tk.Toplevel(self.root)
+        welcome_window.title(APP_TITLE)
+        welcome_window.resizable(False, False)
+        welcome_window.transient(self.root)
+        welcome_window.grab_set()
+
+        def close_program():
+            welcome_window.grab_release()
+            welcome_window.destroy()
+            self.root.destroy()
+
+        welcome_window.protocol("WM_DELETE_WINDOW", close_program)
+
+        tk.Label(
+            welcome_window,
+            text=APP_TITLE,
+            anchor="center",
+            font=("TkDefaultFont", 14, "bold")
+        ).pack(fill="x", padx=18, pady=(16, 2))
+
+        tk.Label(
+            welcome_window,
+            text=f"Version {APP_VERSION}",
+            anchor="center"
+        ).pack(fill="x", padx=18, pady=(0, 12))
+
+        commands_text = (
+            "Viewport Commands\n\n"
+            "Zoom: Ctrl + Mouse Wheel\n"
+            "Scroll: Mouse Wheel vertically, Shift + Mouse Wheel horizontally\n"
+            "Select: Inspect Mode, then left-click a tile\n"
+            "Paint: Pick a tile, then left-click or drag in Paint Mode"
+        )
+
+        tk.Label(
+            welcome_window,
+            text=commands_text,
+            anchor="w",
+            justify="left"
+        ).pack(fill="x", padx=18, pady=(0, 14))
+
+        status_label = tk.Label(
+            welcome_window,
+            text="Select the folder that contains Horsey.exe to continue.",
+            anchor="w",
+            justify="left",
+            fg="red",
+            wraplength=380
+        )
+        status_label.pack(fill="x", padx=18, pady=(0, 8))
+
+        def select_horsey_game_folder():
+            selected = filedialog.askdirectory(
+                title="Select Horsey Game Folder",
+                parent=welcome_window
+            )
+
+            if not selected:
+                status_label.config(text="Select a valid Horsey Game folder to continue.")
+                return
+
+            try:
+                backup_path, install_location_changed = self.save_install_location(Path(selected))
+            except Exception as exc:
+                status_label.config(text=str(exc))
+                messagebox.showerror("Invalid Horsey Game Folder", str(exc), parent=welcome_window)
+                return
+
+            welcome_window.grab_release()
+            welcome_window.destroy()
+
+            backup_text = (
+                "A backup of the official map was created at:\n"
+                f"{backup_path}\n\n"
+                if install_location_changed
+                else ""
+            )
+            messagebox.showinfo(
+                "Horsey Game Folder Saved",
+                "Horsey Game folder accepted.\n\n"
+                f"{backup_text}"
+                "You are ready to start making maps.",
+                parent=self.root
+            )
+
+        button_row = tk.Frame(welcome_window)
+        button_row.pack(fill="x", padx=18, pady=(0, 16))
+
+        tk.Button(
+            button_row,
+            text="Select Horsey Game Folder",
+            command=select_horsey_game_folder
+        ).pack(side="left")
+
+        tk.Button(
+            button_row,
+            text="Exit",
+            command=close_program
+        ).pack(side="right")
+
+        self.apply_theme(welcome_window)
+        self.center_window(welcome_window)
 
     def official_map_path(self):
         install_location = self.settings.get("install_location", "").strip()
@@ -482,10 +1088,15 @@ class HorseyMapEditor:
     def debug_clear_install_location(self):
         self.settings["install_location"] = ""
         save_settings(self.settings)
-        messagebox.showinfo("DEBUG", "Install location cleared. Restart or trigger validation to test.")
+        messagebox.showinfo("DEBUG", "Install location cleared. Select a valid folder to continue.")
         self.status.config(text="DEBUG: Install location cleared.")
+        self.open_welcome_window()
 
     def export_map_to_game(self):
+        if not self.has_map_loaded():
+            messagebox.showwarning("No Map Loaded", "Load a map before exporting to the game.")
+            return
+
         confirmed = messagebox.askyesno(
             "Export Map to Game",
             "This will replace the game's current /data/horsey.tmx with the map currently open in the editor.\n\n"
@@ -611,6 +1222,8 @@ class HorseyMapEditor:
         return "break"
 
     def populate_tile_selector(self):
+        theme = self.theme()
+
         for child in self.tile_list_frame.winfo_children():
             child.destroy()
 
@@ -621,17 +1234,42 @@ class HorseyMapEditor:
             tile_name = self.tile_name(tile_id)
             tile_color = self.tile_color(tile_id)
 
-            outer = tk.Frame(self.tile_list_frame, bg="white", height=30)
+            outer = tk.Frame(self.tile_list_frame, bg=theme["panel_bg"], height=30)
             outer.pack(fill="x", pady=1, padx=(1, 4))
             outer.pack_propagate(False)
 
-            row = tk.Frame(outer, relief="ridge", bd=1, bg="#d9d9d9")
+            row = tk.Frame(
+                outer,
+                relief="raised",
+                bd=2,
+                bg=theme["row_bg"],
+                highlightthickness=0
+            )
             row.pack(fill="both", expand=True, padx=2, pady=2)
 
-            swatch = tk.Label(row, text="", bg=tile_color, width=3, height=1, relief="sunken", bd=1)
+            swatch = tk.Label(
+                row,
+                text="",
+                bg=tile_color,
+                width=3,
+                height=1,
+                relief="flat",
+                bd=0,
+                highlightthickness=1,
+                highlightbackground=theme["control_border"],
+                highlightcolor=theme["control_border"]
+            )
+            swatch.is_tile_swatch = True
             swatch.pack(side="left", padx=4, pady=4)
 
-            label = tk.Label(row, text=f"{tile_name} | ID: {tile_id}", anchor="w", justify="left", bg="#d9d9d9")
+            label = tk.Label(
+                row,
+                text=f"{tile_name} | ID: {tile_id}",
+                anchor="w",
+                justify="left",
+                bg=theme["row_bg"],
+                fg=theme["text"]
+            )
             label.pack(side="left", fill="x", expand=True, padx=4, pady=2)
 
             row.bind("<Button-1>", lambda event, tid=tile_id: self.select_tile(tid))
@@ -650,21 +1288,28 @@ class HorseyMapEditor:
         self.set_mode(MODE_PAINT)
 
     def update_tile_selector_selection(self):
+        theme = self.theme()
+
         for tile_id, widgets in self.tile_buttons.items():
             is_selected = self.editor_mode == MODE_PAINT and tile_id == self.selected_tile_id
-            bg = "white" if is_selected else "#d9d9d9"
+            bg = theme["row_selected_bg"] if is_selected else theme["row_bg"]
 
             outer, row, label = widgets
-            row.config(bg=bg)
-            label.config(bg=bg)
+            row.config(
+                bg=bg,
+                relief="sunken" if is_selected else "raised",
+                highlightbackground=theme["selection_border"] if is_selected else theme["panel_border"],
+                highlightcolor=theme["selection_border"] if is_selected else theme["panel_border"]
+            )
+            label.config(bg=bg, fg=theme["text"])
 
             # Resize the inner row inside a fixed-height outer frame instead of changing borders.
             # This gives a thicker-looking selection without pushing neighboring rows around.
             if is_selected:
-                outer.config(bg="black")
+                outer.config(bg=theme["selection_border"])
                 row.pack_configure(padx=1, pady=1)
             else:
-                outer.config(bg="white")
+                outer.config(bg=theme["panel_bg"])
                 row.pack_configure(padx=2, pady=2)
 
     def update_inspector_panel(self):
@@ -718,6 +1363,51 @@ class HorseyMapEditor:
             return self.tile_defs[tile_id].get("name", f"Tile {tile_id}")
         return f"Unknown ({tile_id})"
 
+    def has_map_loaded(self):
+        return self.image is not None
+
+    def show_empty_view(self):
+        self.canvas.delete("all")
+        self.empty_view_window_id = None
+        self.viewport_image_id = None
+        self.hover_rect = None
+        self.highlight_rect = None
+        self.grid_lines = []
+
+        if self.empty_view_button is None:
+            self.empty_view_button = tk.Button(
+                self.canvas,
+                text="Load Map",
+                command=self.load_map_dialog,
+                width=18,
+                height=2
+            )
+            self.apply_theme_to_widget(self.empty_view_button, self.theme())
+
+        x = self.canvas_width() // 2
+        y = self.canvas_height() // 2
+
+        if self.empty_view_window_id is None:
+            self.empty_view_window_id = self.canvas.create_window(
+                x,
+                y,
+                window=self.empty_view_button
+            )
+        else:
+            self.canvas.coords(self.empty_view_window_id, x, y)
+
+        self.update_scrollbars()
+        self.status.config(text="No map loaded.")
+
+    def clear_empty_view(self):
+        if self.empty_view_window_id is not None:
+            self.canvas.delete(self.empty_view_window_id)
+            self.empty_view_window_id = None
+
+        if self.empty_view_button is not None:
+            self.empty_view_button.destroy()
+            self.empty_view_button = None
+
     def draw_map(self):
         tile_rgb_cache = {}
         pixel_data = []
@@ -732,6 +1422,7 @@ class HorseyMapEditor:
         self.image = Image.new("RGB", (self.map_width, self.map_height))
         self.image.putdata(pixel_data)
 
+        self.clear_empty_view()
         self.canvas.delete("all")
         self.viewport_image_id = None
         self.hover_rect = None
@@ -752,9 +1443,16 @@ class HorseyMapEditor:
             return
 
         try:
-            self.current_file = Path(file_path)
-            self.output_file = self.current_file.with_name(f"{self.current_file.stem}_edited.tmx")
-            self.content, self.original_csv, self.tiles, self.map_width, self.map_height = load_tmx(self.current_file)
+            loaded_file = Path(file_path)
+            content, original_csv, tiles, map_width, map_height = load_tmx(loaded_file)
+
+            self.current_file = loaded_file
+            self.output_file = loaded_file.with_name(f"{loaded_file.stem}_edited.tmx")
+            self.content = content
+            self.original_csv = original_csv
+            self.tiles = tiles
+            self.map_width = map_width
+            self.map_height = map_height
 
             self.view_x = 0
             self.view_y = 0
@@ -763,6 +1461,9 @@ class HorseyMapEditor:
             self.inspected_tile_xy = None
             self.last_mouse_x = None
             self.last_mouse_y = None
+            self.undo_stack = []
+            self.current_action = None
+            self.is_painting = False
 
             self.draw_map()
             self.populate_tile_selector()
@@ -774,6 +1475,10 @@ class HorseyMapEditor:
             messagebox.showerror("Load Failed", str(exc))
 
     def save_as_dialog(self):
+        if not self.has_map_loaded():
+            messagebox.showwarning("No Map Loaded", "Load a map before saving.")
+            return
+
         file_path = filedialog.asksaveasfilename(
             title="Save Horsey TMX As",
             defaultextension=".tmx",
@@ -787,6 +1492,9 @@ class HorseyMapEditor:
         self.save()
 
     def build_current_map_content(self):
+        if not self.has_map_loaded():
+            raise ValueError("No map is loaded.")
+
         new_lines = []
         for row in range(0, len(self.tiles), self.map_width):
             new_lines.append(",".join(self.tiles[row:row + self.map_width]))
@@ -795,6 +1503,10 @@ class HorseyMapEditor:
         return self.content.replace(self.original_csv, new_csv)
 
     def save(self):
+        if not self.has_map_loaded() or self.current_file is None or self.output_file is None:
+            messagebox.showwarning("No Map Loaded", "Load a map before saving.")
+            return
+
         BACKUP_DIR.mkdir(exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -925,11 +1637,15 @@ class HorseyMapEditor:
 
     def on_canvas_resize(self, event=None):
         if self.image is None:
+            self.show_empty_view()
             return
         self.clamp_view()
         self.redraw_viewport()
 
     def on_ctrl_scroll(self, event):
+        if not self.has_map_loaded():
+            return "break"
+
         now = time.monotonic()
 
         if now - self.last_zoom_time < self.zoom_cooldown:
@@ -961,6 +1677,9 @@ class HorseyMapEditor:
         return self.get_tile_xy_from_position(event.x, event.y)
 
     def get_tile_xy_from_position(self, canvas_x, canvas_y):
+        if not self.has_map_loaded():
+            return None, None
+
         if canvas_x < 0 or canvas_y < 0 or canvas_x >= self.canvas_width() or canvas_y >= self.canvas_height():
             return None, None
 
@@ -986,9 +1705,17 @@ class HorseyMapEditor:
         if self.hover_rect is not None:
             self.canvas.delete(self.hover_rect)
             self.hover_rect = None
+        if not self.has_map_loaded():
+            self.status.config(text="No map loaded.")
+            return
         self.status.config(text="Outside map.")
 
     def update_hover_from_position(self, canvas_x, canvas_y):
+        if not self.has_map_loaded():
+            self.hover_tile_xy = None
+            self.status.config(text="No map loaded.")
+            return
+
         x, y = self.get_tile_xy_from_position(canvas_x, canvas_y)
 
         if x is None:
@@ -1019,7 +1746,10 @@ class HorseyMapEditor:
         self.highlight_tile_xy = None
         self.inspected_tile_xy = None
         self.update_inspector_panel()
-        self.status.config(text="Highlight cleared.")
+        if self.has_map_loaded():
+            self.status.config(text="Highlight cleared.")
+        else:
+            self.status.config(text="No map loaded.")
         self.redraw_overlays()
 
     def begin_action(self, description):
@@ -1054,6 +1784,9 @@ class HorseyMapEditor:
         return "break"
 
     def paint_tile(self, event):
+        if not self.has_map_loaded():
+            return
+
         x, y = self.get_tile_xy_from_event(event)
 
         if x is None:
@@ -1082,7 +1815,7 @@ class HorseyMapEditor:
         self.tiles[index] = self.selected_tile_id
         self.image.putpixel((x, y), self.to_rgb(self.tile_color(self.selected_tile_id)))
 
-        self.status.config(text=f"({x}, {y}) | {self.tile_name(old)} → {self.tile_name(self.selected_tile_id)}")
+        self.status.config(text=f"({x}, {y}) | {self.tile_name(old)} -> {self.tile_name(self.selected_tile_id)}")
         self.schedule_paint_redraw()
 
         if single_step_action:
@@ -1138,16 +1871,18 @@ class HorseyMapEditor:
         if self.tile_size < 6:
             return
 
+        grid_color = "#222222" if not self.settings.get("dark_mode", False) else "#4a4a4a"
+
         for x in range(tile_x1, tile_x2 + 1):
             screen_x = x * self.tile_size - self.view_x
             self.grid_lines.append(
-                self.canvas.create_line(screen_x, 0, screen_x, self.canvas_height(), fill="#222222", width=1, tags="grid")
+                self.canvas.create_line(screen_x, 0, screen_x, self.canvas_height(), fill=grid_color, width=1, tags="grid")
             )
 
         for y in range(tile_y1, tile_y2 + 1):
             screen_y = y * self.tile_size - self.view_y
             self.grid_lines.append(
-                self.canvas.create_line(0, screen_y, self.canvas_width(), screen_y, fill="#222222", width=1, tags="grid")
+                self.canvas.create_line(0, screen_y, self.canvas_width(), screen_y, fill=grid_color, width=1, tags="grid")
             )
 
     def redraw_overlays(self):
