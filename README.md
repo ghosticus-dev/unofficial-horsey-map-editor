@@ -1,10 +1,26 @@
 # Unofficial Horsey Game Map Editor
 
-**ALPHA 0.2.0**
+**ALPHA 0.2.1 HOTFIX**
 
 An unofficial TMX map editor for Horsey. The editor currently focuses on terrain painting and Locs object inspection/placement while preserving game-critical TMX object GIDs.
 
 This is an early alpha modding tool. Keep backups of anything you care about.
+
+[Download the latest release](https://github.com/ghosticus-dev/unofficial-horsey-map-editor/releases)
+
+## Quick Install
+
+1. Download the latest release from the Releases page.
+2. Extract the release files to a folder.
+3. Keep `tile_defs.json` in the same folder as the editor executable.
+4. Run the editor.
+5. On first launch, select the folder that contains `Horsey.exe`.
+
+## Important Save Notes
+
+Back up your Horsey save files before exporting edited maps.
+
+New maps require a new game/save file. Horsey bakes map data into save data, so an existing save may not reflect newly exported map changes correctly.
 
 ## Current Features
 
@@ -27,8 +43,6 @@ The editor is designed to preserve object GIDs during save/export. It also block
 
 On first setup, the editor asks for the Horsey game folder and creates a backup of the official map before exports are allowed.
 
-Important: new maps require a new save file. Horsey bakes map data into save data, so an existing save may not reflect a newly exported map correctly.
-
 ## Requirements
 
 - Windows
@@ -36,8 +50,6 @@ Important: new maps require a new save file. Horsey bakes map data into save dat
 - Pillow
 - Tkinter, included with most Python installs
 - A local Horsey install folder containing `Horsey.exe`
-
-Prebuilt downloads are available on the [Releases page](https://github.com/ghosticus-dev/unofficial-horsey-map-editor/releases).
 
 Install Python dependencies:
 
