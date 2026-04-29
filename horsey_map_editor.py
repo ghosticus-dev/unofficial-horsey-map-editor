@@ -13,7 +13,7 @@ from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageColor, ImageTk
 
 APP_TITLE = "Unofficial Horsey Game Map Editor"
-APP_VERSION = "0.2.0"
+APP_VERSION = "ALPHA 0.2.0"
 BASE_DIR = Path(__file__).resolve().parent
 BACKUP_DIR = BASE_DIR / "backups"
 TILE_DEFS_FILE = BASE_DIR / "tile_defs.json"
