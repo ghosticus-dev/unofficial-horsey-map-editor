@@ -240,6 +240,7 @@ class HorseyMapEditor:
         self.highlight_rect = None
         self.object_marker_ids = []
         self.hover_object_outline = None
+        self.hover_object_label_ids = []
         self.highlight_object_outline = None
         self.grid_lines = []
 
@@ -367,7 +368,7 @@ class HorseyMapEditor:
 
         
 
-        self.inspector_panel = tk.Frame(self.sidebar, height=120, relief="groove", bd=1, bg="white")
+        self.inspector_panel = tk.Frame(self.sidebar, height=145, relief="groove", bd=1, bg="white")
         self.inspector_panel.pack(side="top", fill="x", padx=4, pady=(4, 0))
         self.inspector_panel.pack_propagate(False)
 
@@ -380,6 +381,28 @@ class HorseyMapEditor:
         )
         self.inspector_title.pack(fill="x", padx=0, pady=(0, 2))
 
+        self.inspector_details_frame = tk.Frame(self.inspector_panel, bg="white")
+        self.inspector_details_frame.pack(fill="both", expand=True, padx=8, pady=(0, 4))
+
+        self.inspector_details_text = tk.Text(
+            self.inspector_details_frame,
+            height=4,
+            wrap="word",
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            cursor="arrow",
+            takefocus=0
+        )
+        self.inspector_details_scroll = ttk.Scrollbar(
+            self.inspector_details_frame,
+            orient="vertical",
+            command=self.inspector_details_text.yview
+        )
+        self.inspector_details_text.configure(yscrollcommand=self.on_inspector_details_scroll)
+        self.inspector_details_text.pack(side="left", fill="both", expand=True)
+        self.inspector_details_text.bind("<MouseWheel>", self.on_inspector_details_wheel)
+
         self.inspector_details_label = tk.Label(
             self.inspector_panel,
             text="No Coordinate Selected",
@@ -388,7 +411,7 @@ class HorseyMapEditor:
             wraplength=220,
             bg="white"
         )
-        self.inspector_details_label.pack(fill="x", padx=8, pady=(0, 4))
+        self.inspector_details_label.pack_forget()
 
         self.copy_tile_button = tk.Button(self.inspector_panel, text="Copy Tile", command=self.copy_inspected_tile)
         self.copy_tile_button.pack(fill="x", padx=8, pady=(0, 6))
@@ -707,6 +730,15 @@ class HorseyMapEditor:
                     highlightbackground=theme["control_border"],
                     highlightcolor=theme["selection_border"]
                 )
+            elif isinstance(widget, tk.Text):
+                widget.config(
+                    bg=theme["panel_bg"],
+                    fg=theme["text"],
+                    insertbackground=theme["text"],
+                    relief="flat",
+                    bd=0,
+                    highlightthickness=0
+                )
             elif isinstance(widget, tk.Radiobutton):
                 widget.config(
                     bg=theme["button_bg"],
@@ -890,7 +922,8 @@ class HorseyMapEditor:
             (self.sidebar_title, "header_bg"),
             (self.inspector_panel, "panel_bg"),
             (self.inspector_title, "header_bg"),
-            (self.inspector_details_label, "panel_bg"),
+            (self.inspector_details_frame, "panel_bg"),
+            (self.inspector_details_text, "panel_bg"),
             (self.tile_selector_panel, "panel_bg"),
             (self.tile_selector_title, "header_bg"),
             (self.selected_tile_label, "panel_bg"),
@@ -941,6 +974,7 @@ class HorseyMapEditor:
                 pass
 
         scrollbar_styles = [
+            (self.inspector_details_scroll, "Horsey.Vertical.TScrollbar"),
             (self.tile_list_scroll, "Horsey.Vertical.TScrollbar"),
             (self.object_list_scroll, "Horsey.Vertical.TScrollbar"),
             (self.v_scroll, "Horsey.Vertical.TScrollbar"),
@@ -1778,21 +1812,19 @@ class HorseyMapEditor:
             property_text = "\n".join(property_lines) if property_lines else "None"
             type_text = obj.get("type") or "(blank)"
 
-            self.inspector_details_label.config(
-                text=(
-                    "Object Layer: Locs\n"
-                    f"Object ID: {obj.get('id')}\n"
-                    f"Type: {type_text}\n"
-                    f"GID: {obj.get('gid')}\n"
-                    f"Coordinate: ({obj.get('tile_x')}, {obj.get('tile_y')})\n"
-                    f"Properties:\n{property_text}"
-                )
+            self.set_inspector_details(
+                "Object Layer: Locs\n"
+                f"Object ID: {obj.get('id')}\n"
+                f"Type: {type_text}\n"
+                f"GID: {obj.get('gid')}\n"
+                f"Coordinate: ({obj.get('tile_x')}, {obj.get('tile_y')})\n"
+                f"Properties:\n{property_text}"
             )
             self.copy_tile_button.pack_forget()
             return
 
         if self.inspected_tile_xy is None:
-            self.inspector_details_label.config(text="No Coordinate Selected")
+            self.set_inspector_details("No Coordinate Selected")
             self.copy_tile_button.pack_forget()
             return
 
@@ -1800,16 +1832,45 @@ class HorseyMapEditor:
         index = y * self.map_width + x
         tile_id = self.tiles[index]
 
-        self.inspector_details_label.config(
-            text=(
-                f"Coordinate: ({x}, {y})\n"
-                f"Type: {self.tile_name(tile_id)}\n"
-                f"ID: {tile_id}"
-            )
+        self.set_inspector_details(
+            f"Coordinate: ({x}, {y})\n"
+            f"Type: {self.tile_name(tile_id)}\n"
+            f"ID: {tile_id}"
         )
 
         if not self.copy_tile_button.winfo_ismapped():
             self.copy_tile_button.pack(fill="x", padx=8, pady=(0, 6))
+
+    def set_inspector_details(self, text):
+        self.inspector_details_text.config(state="normal")
+        self.inspector_details_text.delete("1.0", "end")
+        self.inspector_details_text.insert("1.0", text)
+        self.inspector_details_text.config(state="disabled")
+        self.inspector_details_text.yview_moveto(0)
+        self.root.after_idle(self.update_inspector_details_scrollbar)
+
+    def on_inspector_details_scroll(self, first, last):
+        self.update_inspector_details_scrollbar()
+
+    def update_inspector_details_scrollbar(self):
+        first, last = self.inspector_details_text.yview()
+        has_overflow = float(first) > 0.0 or float(last) < 1.0
+
+        if has_overflow and not self.inspector_details_scroll.winfo_ismapped():
+            self.inspector_details_scroll.pack(side="right", fill="y")
+        elif not has_overflow and self.inspector_details_scroll.winfo_ismapped():
+            self.inspector_details_scroll.pack_forget()
+
+        self.inspector_details_scroll.set(first, last)
+
+    def on_inspector_details_wheel(self, event):
+        first, last = self.inspector_details_text.yview()
+        if float(first) <= 0.0 and float(last) >= 1.0:
+            return "break"
+
+        step = int(-1 * (event.delta / 120))
+        self.inspector_details_text.yview_scroll(step, "units")
+        return "break"
 
     def copy_inspected_tile(self):
         if self.inspected_tile_xy is None:
@@ -2310,6 +2371,7 @@ class HorseyMapEditor:
         if self.hover_rect is not None:
             self.canvas.delete(self.hover_rect)
             self.hover_rect = None
+        self.redraw_overlays()
         if not self.has_map_loaded():
             self.status.config(text="No map loaded.")
             return
@@ -2639,6 +2701,10 @@ class HorseyMapEditor:
             self.canvas.delete(self.hover_object_outline)
             self.hover_object_outline = None
 
+        for label_id in self.hover_object_label_ids:
+            self.canvas.delete(label_id)
+        self.hover_object_label_ids = []
+
         if self.highlight_object_outline is not None:
             self.canvas.delete(self.highlight_object_outline)
             self.highlight_object_outline = None
@@ -2654,6 +2720,8 @@ class HorseyMapEditor:
 
         if self.hover_object is not None and self.show_locs.get():
             self.hover_object_outline = self.draw_object_outline(self.hover_object, color="#66ccff", width=2)
+            if self.editor_mode != MODE_PAINT:
+                self.hover_object_label_ids = self.draw_object_hover_label(self.hover_object)
 
     def draw_tile_outline(self, x, y, color="yellow", width=2):
         x1 = x * self.tile_size - self.view_x
@@ -2665,6 +2733,44 @@ class HorseyMapEditor:
 
     def draw_object_outline(self, obj, color="#00ffcc", width=2):
         return self.draw_tile_outline(obj.get("tile_x", 0), obj.get("tile_y", 0), color=color, width=width)
+
+    def draw_object_hover_label(self, obj):
+        object_name = self.object_display_name(obj)
+        x = obj.get("tile_x", 0)
+        y = obj.get("tile_y", 0)
+        center_x = x * self.tile_size - self.view_x + self.tile_size / 2
+        label_y = y * self.tile_size - self.view_y - 10
+
+        if label_y < 12:
+            label_y = (y + 1) * self.tile_size - self.view_y + 12
+
+        text_id = self.canvas.create_text(
+            center_x,
+            label_y,
+            text=object_name,
+            fill="#ffffff",
+            font=("TkDefaultFont", 9, "bold"),
+            tags="object_hover_label"
+        )
+        bbox = self.canvas.bbox(text_id)
+
+        if bbox is None:
+            return [text_id]
+
+        pad_x = 5
+        pad_y = 3
+        rect_id = self.canvas.create_rectangle(
+            bbox[0] - pad_x,
+            bbox[1] - pad_y,
+            bbox[2] + pad_x,
+            bbox[3] + pad_y,
+            fill="#111111",
+            outline="#66ccff",
+            width=1,
+            tags="object_hover_label"
+        )
+        self.canvas.tag_raise(text_id, rect_id)
+        return [rect_id, text_id]
 
 
 if __name__ == "__main__":
