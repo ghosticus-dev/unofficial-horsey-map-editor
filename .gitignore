@@ -4,6 +4,7 @@ __pycache__/
 *.log
 *.tmp
 editor_settings.json
+backups/
 .DS_Store
 Thumbs.db
 .vscode/
