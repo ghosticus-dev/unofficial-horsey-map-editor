@@ -5,6 +5,7 @@ import sys
 import time
 import tkinter as tk
 import ctypes
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -130,7 +131,52 @@ def load_tmx(path):
     if len(tiles) != width * height:
         raise ValueError(f"Tile count mismatch: got {len(tiles)}, expected {width * height}.")
 
-    return content, csv_data, tiles, width, height
+    objects = load_tmx_objects(content)
+
+    return content, csv_data, tiles, width, height, objects
+
+
+def load_tmx_objects(content):
+    root = ET.fromstring(content)
+    locs_group = None
+
+    for object_group in root.findall("objectgroup"):
+        if object_group.get("name") == "Locs":
+            locs_group = object_group
+            break
+
+    if locs_group is None:
+        return []
+
+    objects = []
+    for tmx_object in locs_group.findall("object"):
+        properties = {}
+        properties_element = tmx_object.find("properties")
+
+        if properties_element is not None:
+            for prop in properties_element.findall("property"):
+                properties[prop.get("name", "")] = {
+                    "type": prop.get("type", ""),
+                    "value": prop.get("value", "")
+                }
+
+        x = float(tmx_object.get("x", "0"))
+        y = float(tmx_object.get("y", "0"))
+
+        objects.append({
+            "id": tmx_object.get("id", ""),
+            "type": tmx_object.get("type", ""),
+            "gid": tmx_object.get("gid", ""),
+            "x": x,
+            "y": y,
+            "width": float(tmx_object.get("width", "0")),
+            "height": float(tmx_object.get("height", "0")),
+            "tile_x": int(x // 32),
+            "tile_y": int(y // 32),
+            "properties": properties,
+        })
+
+    return objects
 
 
 class HorseyMapEditor:
@@ -146,6 +192,7 @@ class HorseyMapEditor:
         self.editor_mode = MODE_INSPECT
         self.tile_buttons = {}
         self.inspected_tile_xy = None
+        self.inspected_object = None
 
         self.zoom_levels = [5, 6, 8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40]
         self.zoom_index = 3
@@ -170,6 +217,8 @@ class HorseyMapEditor:
 
         self.hover_tile_xy = None
         self.highlight_tile_xy = None
+        self.hover_object = None
+        self.highlight_object = None
         self.last_mouse_x = None
         self.last_mouse_y = None
 
@@ -178,6 +227,9 @@ class HorseyMapEditor:
         self.is_painting = False
         self.hover_rect = None
         self.highlight_rect = None
+        self.object_marker_ids = []
+        self.hover_object_outline = None
+        self.highlight_object_outline = None
         self.grid_lines = []
 
         self.current_file = None
@@ -185,6 +237,7 @@ class HorseyMapEditor:
         self.content = ""
         self.original_csv = ""
         self.tiles = []
+        self.map_objects = []
         self.map_width = 0
         self.map_height = 0
 
@@ -206,6 +259,7 @@ class HorseyMapEditor:
         self.editor_button.pack(side="left", padx=4, pady=2)
 
         self.show_grid = tk.BooleanVar(value=True)
+        self.show_locs = tk.BooleanVar(value=True)
         self.view_button = self.create_toolbar_menu_button(
             "View",
             [
@@ -213,6 +267,11 @@ class HorseyMapEditor:
                     "label": "Grid Lines",
                     "command": self.toggle_grid_menu_item,
                     "dynamic_label": self.grid_toggle_menu_label
+                },
+                {
+                    "label": "Locs Layer",
+                    "command": self.toggle_locs_menu_item,
+                    "dynamic_label": self.locs_toggle_menu_label
                 },
             ]
         )
@@ -504,6 +563,18 @@ class HorseyMapEditor:
 
     def grid_toggle_menu_label(self):
         return "Hide Gridlines" if self.show_grid.get() else "Show Gridlines"
+
+    def toggle_locs_menu_item(self):
+        self.show_locs.set(not self.show_locs.get())
+        if not self.show_locs.get():
+            self.hover_object = None
+            self.highlight_object = None
+            self.inspected_object = None
+            self.update_inspector_panel()
+        self.redraw_viewport()
+
+    def locs_toggle_menu_label(self):
+        return "Hide Locs Layer" if self.show_locs.get() else "Show Locs Layer"
 
     def center_window(self, window):
         window.update_idletasks()
@@ -1320,6 +1391,32 @@ class HorseyMapEditor:
                 row.pack_configure(padx=2, pady=2)
 
     def update_inspector_panel(self):
+        if self.inspected_object is not None:
+            obj = self.inspected_object
+            properties = obj.get("properties", {})
+            property_lines = []
+
+            for name, prop in properties.items():
+                prop_type = prop.get("type")
+                type_text = f" ({prop_type})" if prop_type else ""
+                property_lines.append(f"{name}{type_text}: {prop.get('value', '')}")
+
+            property_text = "\n".join(property_lines) if property_lines else "None"
+            type_text = obj.get("type") or "(blank)"
+
+            self.inspector_details_label.config(
+                text=(
+                    "Object Layer: Locs\n"
+                    f"Object ID: {obj.get('id')}\n"
+                    f"Type: {type_text}\n"
+                    f"GID: {obj.get('gid')}\n"
+                    f"Coordinate: ({obj.get('tile_x')}, {obj.get('tile_y')})\n"
+                    f"Properties:\n{property_text}"
+                )
+            )
+            self.copy_tile_button.pack_forget()
+            return
+
         if self.inspected_tile_xy is None:
             self.inspector_details_label.config(text="No Coordinate Selected")
             self.copy_tile_button.pack_forget()
@@ -1379,6 +1476,9 @@ class HorseyMapEditor:
         self.viewport_image_id = None
         self.hover_rect = None
         self.highlight_rect = None
+        self.object_marker_ids = []
+        self.hover_object_outline = None
+        self.highlight_object_outline = None
         self.grid_lines = []
 
         if self.empty_view_button is None:
@@ -1434,6 +1534,9 @@ class HorseyMapEditor:
         self.viewport_image_id = None
         self.hover_rect = None
         self.highlight_rect = None
+        self.object_marker_ids = []
+        self.hover_object_outline = None
+        self.highlight_object_outline = None
         self.grid_lines = []
 
         self.clamp_view()
@@ -1451,13 +1554,14 @@ class HorseyMapEditor:
 
         try:
             loaded_file = Path(file_path)
-            content, original_csv, tiles, map_width, map_height = load_tmx(loaded_file)
+            content, original_csv, tiles, map_width, map_height, map_objects = load_tmx(loaded_file)
 
             self.current_file = loaded_file
             self.output_file = loaded_file.with_name(f"{loaded_file.stem}_edited.tmx")
             self.content = content
             self.original_csv = original_csv
             self.tiles = tiles
+            self.map_objects = map_objects
             self.map_width = map_width
             self.map_height = map_height
 
@@ -1465,7 +1569,10 @@ class HorseyMapEditor:
             self.view_y = 0
             self.hover_tile_xy = None
             self.highlight_tile_xy = None
+            self.hover_object = None
+            self.highlight_object = None
             self.inspected_tile_xy = None
+            self.inspected_object = None
             self.last_mouse_x = None
             self.last_mouse_y = None
             self.undo_stack = []
@@ -1683,6 +1790,20 @@ class HorseyMapEditor:
     def get_tile_xy_from_event(self, event):
         return self.get_tile_xy_from_position(event.x, event.y)
 
+    def get_object_from_tile_xy(self, x, y):
+        if x is None or y is None or not self.show_locs.get():
+            return None
+
+        for obj in reversed(self.map_objects):
+            if obj.get("tile_x") == x and obj.get("tile_y") == y:
+                return obj
+
+        return None
+
+    def object_label(self, obj):
+        object_type = obj.get("type") or "(blank)"
+        return f"{object_type} | ID: {obj.get('id')} | GID: {obj.get('gid')}"
+
     def get_tile_xy_from_position(self, canvas_x, canvas_y):
         if not self.has_map_loaded():
             return None, None
@@ -1709,6 +1830,7 @@ class HorseyMapEditor:
 
     def on_mouse_leave(self, event):
         self.hover_tile_xy = None
+        self.hover_object = None
         if self.hover_rect is not None:
             self.canvas.delete(self.hover_rect)
             self.hover_rect = None
@@ -1727,12 +1849,17 @@ class HorseyMapEditor:
 
         if x is None:
             self.hover_tile_xy = None
+            self.hover_object = None
             self.status.config(text="Outside map.")
         else:
             self.hover_tile_xy = (x, y)
+            self.hover_object = self.get_object_from_tile_xy(x, y)
             index = y * self.map_width + x
             tile_id = self.tiles[index]
-            self.status.config(text=f"({x}, {y}) | {self.tile_name(tile_id)}")
+            if self.hover_object is not None:
+                self.status.config(text=f"({x}, {y}) | Locs: {self.object_label(self.hover_object)}")
+            else:
+                self.status.config(text=f"({x}, {y}) | {self.tile_name(tile_id)}")
 
     def highlight_tile(self, event):
         x, y = self.get_tile_xy_from_event(event)
@@ -1740,18 +1867,27 @@ class HorseyMapEditor:
         if x is None:
             return
 
+        obj = self.get_object_from_tile_xy(x, y)
+        self.highlight_object = obj
+        self.inspected_object = obj
         self.highlight_tile_xy = (x, y)
-        self.inspected_tile_xy = (x, y)
+        self.inspected_tile_xy = None if obj is not None else (x, y)
         index = y * self.map_width + x
         tile_id = self.tiles[index]
 
-        self.status.config(text=f"Selected ({x}, {y}) | {self.tile_name(tile_id)}")
+        if obj is not None:
+            self.status.config(text=f"Selected Locs object ({x}, {y}) | {self.object_label(obj)}")
+        else:
+            self.status.config(text=f"Selected ({x}, {y}) | {self.tile_name(tile_id)}")
         self.update_inspector_panel()
         self.redraw_overlays()
 
     def clear_highlight(self, event=None):
         self.highlight_tile_xy = None
+        self.hover_object = None
+        self.highlight_object = None
         self.inspected_tile_xy = None
+        self.inspected_object = None
         self.update_inspector_panel()
         if self.has_map_loaded():
             self.status.config(text="Highlight cleared.")
@@ -1862,6 +1998,7 @@ class HorseyMapEditor:
 
         self.canvas.tag_lower(self.viewport_image_id)
         self.draw_grid(tile_x1, tile_y1, tile_x2, tile_y2)
+        self.draw_locs_layer(tile_x1, tile_y1, tile_x2, tile_y2)
         self.redraw_overlays()
         self.update_scrollbars()
 
@@ -1892,6 +2029,61 @@ class HorseyMapEditor:
                 self.canvas.create_line(0, screen_y, self.canvas_width(), screen_y, fill=grid_color, width=1, tags="grid")
             )
 
+    def draw_locs_layer(self, tile_x1, tile_y1, tile_x2, tile_y2):
+        self.canvas.delete("locs")
+        self.object_marker_ids = []
+
+        if not self.show_locs.get():
+            return
+
+        for obj in self.map_objects:
+            x = obj.get("tile_x")
+            y = obj.get("tile_y")
+
+            if x is None or y is None or x < tile_x1 or x >= tile_x2 or y < tile_y1 or y >= tile_y2:
+                continue
+
+            self.object_marker_ids.extend(self.draw_object_marker(obj))
+
+    def draw_object_marker(self, obj):
+        x = obj.get("tile_x", 0)
+        y = obj.get("tile_y", 0)
+        x1 = x * self.tile_size - self.view_x
+        y1 = y * self.tile_size - self.view_y
+        x2 = x1 + self.tile_size
+        y2 = y1 + self.tile_size
+        inset = max(1, self.tile_size * 0.18)
+        fill = "#2f7dff"
+        outline = "#ffffff"
+
+        ids = [
+            self.canvas.create_rectangle(
+                x1 + inset,
+                y1 + inset,
+                x2 - inset,
+                y2 - inset,
+                fill=fill,
+                outline=outline,
+                width=1,
+                tags="locs"
+            )
+        ]
+
+        if self.tile_size >= 14:
+            label = (obj.get("type") or "?").strip()[:1].upper() or "?"
+            ids.append(
+                self.canvas.create_text(
+                    (x1 + x2) / 2,
+                    (y1 + y2) / 2,
+                    text=label,
+                    fill="#ffffff",
+                    font=("TkDefaultFont", max(6, int(self.tile_size * 0.45)), "bold"),
+                    tags="locs"
+                )
+            )
+
+        return ids
+
     def redraw_overlays(self):
         if self.hover_rect is not None:
             self.canvas.delete(self.hover_rect)
@@ -1901,11 +2093,25 @@ class HorseyMapEditor:
             self.canvas.delete(self.highlight_rect)
             self.highlight_rect = None
 
+        if self.hover_object_outline is not None:
+            self.canvas.delete(self.hover_object_outline)
+            self.hover_object_outline = None
+
+        if self.highlight_object_outline is not None:
+            self.canvas.delete(self.highlight_object_outline)
+            self.highlight_object_outline = None
+
         if self.highlight_tile_xy is not None:
             self.highlight_rect = self.draw_tile_outline(*self.highlight_tile_xy, color="yellow", width=3)
 
+        if self.highlight_object is not None and self.show_locs.get():
+            self.highlight_object_outline = self.draw_object_outline(self.highlight_object, color="#00ffcc", width=3)
+
         if self.hover_tile_xy is not None:
             self.hover_rect = self.draw_tile_outline(*self.hover_tile_xy, color="white", width=2)
+
+        if self.hover_object is not None and self.show_locs.get():
+            self.hover_object_outline = self.draw_object_outline(self.hover_object, color="#66ccff", width=2)
 
     def draw_tile_outline(self, x, y, color="yellow", width=2):
         x1 = x * self.tile_size - self.view_x
@@ -1914,6 +2120,9 @@ class HorseyMapEditor:
         y2 = y1 + self.tile_size
 
         return self.canvas.create_rectangle(x1, y1, x2, y2, outline=color, width=width)
+
+    def draw_object_outline(self, obj, color="#00ffcc", width=2):
+        return self.draw_tile_outline(obj.get("tile_x", 0), obj.get("tile_y", 0), color=color, width=width)
 
 
 if __name__ == "__main__":
