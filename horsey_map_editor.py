@@ -23,6 +23,14 @@ PAINT_TILE_ID = "1"
 MODE_INSPECT = "inspect"
 MODE_PAINT = "paint"
 
+REQUIRED_LOC_GIDS = (
+    "97", "98", "99", "100", "101", "102", "103", "104",
+    "110", "111", "112", "113", "114", "115", "117", "118",
+    "119", "120", "121", "122", "123", "124", "125", "126",
+    "127", "128", "133", "134", "145", "146", "147", "148",
+    "149", "150", "153", "154",
+)
+
 LIGHT_THEME = {
     "root_bg": "#d8d8d8",
     "panel_bg": "#ececec",
@@ -1170,9 +1178,106 @@ class HorseyMapEditor:
         self.status.config(text="DEBUG: Install location cleared.")
         self.open_welcome_window()
 
+    def missing_required_loc_gids(self):
+        present_gids = {obj.get("gid", "") for obj in self.map_objects}
+        return [gid for gid in REQUIRED_LOC_GIDS if gid not in present_gids]
+
+    def is_repeatable_loc_object(self, obj):
+        properties = obj.get("properties", {})
+        has_creature_spawn_properties = "count" in properties and "radius" in properties
+        has_buried_property = "buried" in properties
+        return has_creature_spawn_properties or has_buried_property
+
+    def duplicate_unique_loc_gids(self):
+        unique_gid_objects = {}
+
+        for obj in self.map_objects:
+            if self.is_repeatable_loc_object(obj):
+                continue
+
+            gid = obj.get("gid", "")
+            if not gid:
+                continue
+
+            unique_gid_objects.setdefault(gid, []).append(obj)
+
+        return {
+            gid: objects
+            for gid, objects in unique_gid_objects.items()
+            if len(objects) > 1
+        }
+
+    def missing_required_loc_gids_message(self, missing_gids):
+        return (
+            "This map is missing required Locs object GIDs and is not game ready.\n\n"
+            "Missing GIDs:\n"
+            f"{', '.join(missing_gids)}\n\n"
+            "Every map must contain at least one Locs object for every required GID."
+        )
+
+    def duplicate_unique_loc_gids_message(self, duplicate_gids):
+        lines = []
+
+        for gid, objects in duplicate_gids.items():
+            object_ids = ", ".join(obj.get("id", "") for obj in objects)
+            object_type = objects[0].get("type") or "(blank)"
+            lines.append(f"GID {gid} ({object_type}) appears {len(objects)} times: object IDs {object_ids}")
+
+        return (
+            "This map has duplicate unique Locs object GIDs and is not game ready.\n\n"
+            "Only creature spawners with count/radius and buried objects may appear more than once.\n\n"
+            "Duplicate unique GIDs:\n"
+            + "\n".join(lines)
+        )
+
+    def locs_readiness_errors(self):
+        errors = []
+        missing_gids = self.missing_required_loc_gids()
+        duplicate_gids = self.duplicate_unique_loc_gids()
+
+        if missing_gids:
+            errors.append(self.missing_required_loc_gids_message(missing_gids))
+
+        if duplicate_gids:
+            errors.append(self.duplicate_unique_loc_gids_message(duplicate_gids))
+
+        return errors
+
+    def locs_readiness_message(self, errors):
+        return "\n\n".join(errors)
+
+    def confirm_save_with_locs_rule_failures(self):
+        errors = self.locs_readiness_errors()
+
+        if not errors:
+            return True
+
+        return messagebox.askyesno(
+            "Map Not Game Ready",
+            self.locs_readiness_message(errors)
+            + "\n\nSave anyway?"
+        )
+
+    def can_export_with_required_locs(self):
+        errors = self.locs_readiness_errors()
+
+        if not errors:
+            return True
+
+        messagebox.showerror(
+            "Export Blocked",
+            self.locs_readiness_message(errors)
+            + "\n\nExport is blocked until the required objects are present."
+        )
+        self.status.config(text="Export blocked. Locs object rules failed.")
+        return False
+
     def export_map_to_game(self):
         if not self.has_map_loaded():
             messagebox.showwarning("No Map Loaded", "Load a map before exporting to the game.")
+            return
+
+        if not self.can_export_with_required_locs():
             return
 
         confirmed = messagebox.askyesno(
@@ -1619,6 +1724,10 @@ class HorseyMapEditor:
     def save(self):
         if not self.has_map_loaded() or self.current_file is None or self.output_file is None:
             messagebox.showwarning("No Map Loaded", "Load a map before saving.")
+            return
+
+        if not self.confirm_save_with_locs_rule_failures():
+            self.status.config(text="Save cancelled. Locs object rules failed.")
             return
 
         BACKUP_DIR.mkdir(exist_ok=True)
